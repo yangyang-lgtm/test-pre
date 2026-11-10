@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /home/yaoshi16ultra/workspace/triton/third_party/privateuse -type f | head -100)",
+      "Bash(find /home/yaoshi16ultra/workspace/triton/third_party/privateuse -name \"CMakeLists.txt\" | head -20)",
+      "Bash(which conda; conda info --envs 2>/dev/null || echo \"conda not on PATH\")",
+      "Bash(echo \"CONDA_DEFAULT_ENV=$CONDA_DEFAULT_ENV\"; which python; python --version)",
+      "Bash(find /home/yaoshi16ultra/workspace/triton -path \"*/mlir/Dialect/EmitC*\" -o -path \"*/mlir/Conversion/EmitC*\" -o -path \"*/mlir/Target/EmitC*\" 2>/dev/null | head -30)",
+      "Bash(find /home/yaoshi16ultra/workspace/triton -path \"*/mlir/Conversion/Passes.h\" 2>/dev/null | head -5)",
+      "Bash(python3 -c \"import mlir; print\\(mlir.__file__\\)\" 2>/dev/null || echo \"no mlir python package\"; pip show mlir 2>/dev/null || echo \"pip show mlir failed\")",
+      "Bash(find /home/yaoshi16ultra -maxdepth 5 -path \"*/mlir/Dialect/EmitC*\" 2>/dev/null | head -20; find /usr -path \"*/mlir/Dialect/EmitC*\" 2>/dev/null | head -20; find /opt -path \"*/mlir/Dialect/EmitC*\" 2>/dev/null | head -20)",
+      "Bash(source $\\(conda info --root\\)/etc/profile.d/conda.sh && conda activate base && echo \"Conda base activated: $CONDA_DEFAULT_ENV\")",
+      "Bash(source $\\(conda info --base\\)/etc/profile.d/conda.sh && conda activate base && echo \"Conda base activated: $CONDA_DEFAULT_ENV\" && which python)",
+      "Bash(mkdir:*)",
+      "Bash(find /home/yaoshi16ultra/workspace/triton/third_party/privateuse -type f \\\\\\( -name \"*.cpp\" -o -name \"*.h\" -o -name \"*.td\" -o -name \"*.hpp\" -o -name \"*.c\" \\\\\\) 2>/dev/null | sort)",
+      "Bash(find /home/yaoshi16ultra/workspace/triton/third_party/privateuse -type f \\\\\\( -name \"*.cpp\" -o -name \"*.h\" -o -name \"*.td\" -o -name \"*.py\" \\\\\\) | head -80)",
+      "Bash(find /home/yaoshi16ultra/workspace/triton -path '*/mlir/Conversion/MemRefToLLVM*' 2>/dev/null | head -20)",
+      "Bash(find /home/yaoshi16ultra/workspace/triton/include/triton/Dialect -name \"*.td\" | head -20)",
+      "Bash(bash build_triton.sh 2>&1)",
+      "Bash(find /home/yaoshi16ultra/workspace/triton -name \"passes.h\" -path \"*/privateuse/*\" 2>/dev/null | head -5)",
+      "Bash(TRANSLATE_CPP=1 pytest -vsx third_party/privateuse/test/cases/test_reduction.py 2>&1 | tail -80)",
+      "Bash(find /home/yaoshi16ultra/workspace/triton/third_party/privateuse/ -type f | head -200)",
+      "Bash(find /home/yaoshi16ultra/workspace/triton -maxdepth 3 -name \"llvm-project\" -type d 2>/dev/null; find /home/yaoshi16ultra/workspace/triton -maxdepth 3 -name \"llvm\" -type d 2>/dev/null | head -20)"
+    ]
+  }
+}

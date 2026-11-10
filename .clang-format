@@ -1,0 +1,102 @@
+# ============================================================================
+# Triton 项目 C++ 代码风格（自定义宽松风格）
+# 目标 clang-format 版本：19.1.6（与 .pre-commit-config.yaml 中钉住的版本一致）
+# 基础：LLVM 风格；列宽放宽到 120；类/函数大括号换行；赋值对齐；2 空格缩进
+# ============================================================================
+BasedOnStyle: LLVM
+Language: Cpp
+
+# ---- 列宽与缩进 ----
+ColumnLimit: 120
+IndentWidth: 2
+ContinuationIndentWidth: 2
+ConstructorInitializerIndentWidth: 2
+AccessModifierOffset: -2
+TabWidth: 2
+UseTab: Never
+
+# ---- 指针/引用：类型贴合（int* p 而非 int *p），不随文件自动漂移 ----
+DerivePointerAlignment: false
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+
+# ---- 大括号：类/结构体/函数定义换行；控制语句跟随（if (...) {）----
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterStruct: true
+  AfterFunction: true
+  AfterControlStatement: Never
+  AfterEnum: false
+  AfterExternBlock: false
+  BeforeElse: false
+  BeforeCatch: false
+  IndentBraces: false
+  SplitEmptyFunction: true
+  SplitEmptyRecord: true
+
+# ---- 短语句合并：宽松允许，但 if/else 不同行以免悬垂歧义 ----
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
+AllowShortLambdasOnASingleLine: All
+
+# ---- 对齐 ----
+# BlockIndent：超长调用整体换行、参数块固定缩进，不与 ( 对齐；右括号独立一行。
+AlignAfterOpenBracket: BlockIndent
+AlignConsecutiveAssignments:
+  Enabled: true
+  AcrossEmptyLines: false
+  AcrossComments: false
+  AlignCompound: true
+  PadOperators: true
+AlignConsecutiveMacros:
+  Enabled: true
+  AcrossEmptyLines: true
+  AcrossComments: false
+AlignEscapedNewlines: Left
+AlignOperands: Align
+AlignTrailingComments: true
+
+# ---- 换行 ----
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
+BinPackArguments: true
+BinPackParameters: true
+PackConstructorInitializers: NextLine
+BreakBeforeTernaryOperators: true
+BreakStringLiterals: true
+ReflowComments: true
+
+# ---- 空行 ----
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false
+EmptyLineBeforeAccessModifier: Always
+EmptyLineAfterAccessModifier: Never
+
+# ---- include：不做任何排序/重排，保持手写顺序（IncludeBlocks: Preserve）----
+SortIncludes: Never
+IncludeBlocks: Preserve
+
+# ---- 命名空间 ----
+NamespaceIndentation: None
+FixNamespaceComments: false
+ShortNamespaceLines: 1
+
+# ---- switch/杂项 ----
+IndentCaseLabels: true
+SpaceAfterCStyleCast: false
+SpaceAfterLogicalNot: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeParens: ControlStatements
+SpacesBeforeTrailingComments: 1
+SortUsingDeclarations: true
+SeparateDefinitionBlocks: Leave
+InsertNewlineAtEOF: true
+
+# 安全说明：不开 InsertBraces（自动给无大括号的 if/for 补大括号）。
+# 该选项在 clang-format 19 中仍是实验性质，遇到宏和特殊注释时可能产生错误格式化，
+# 如需启用请先在小范围验证。
+InsertBraces: false
+
