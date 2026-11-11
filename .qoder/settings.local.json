@@ -25,7 +25,11 @@
       "Bash(cp .qoder/settings.local.json /tmp/qoder-settings.local.json.bak && git checkout -- .qoder/settings.local.json && git checkout --orphan new-root && git add -A && git commit -m \"init\" && cp /tmp/qoder-settings.local.json.bak .qoder/settings.local.json && git add .qoder/settings.local.json && git commit -m \"update\")",
       "Bash(git branch -D local/constants && git branch -m local/constants && git log --oneline && git status)",
       "Bash(git add .qoder/settings.local.json && git commit --amend --no-edit && git status --short && git log --oneline)",
-      "Bash(git reflog expire --expire=now --all && git gc --prune=now && git fsck --unreachable --no-reflogs 2>/dev/null | head -5; echo '---'; git log --oneline; git status)"
+      "Bash(git reflog expire --expire=now --all && git gc --prune=now && git fsck --unreachable --no-reflogs 2>/dev/null | head -5; echo '---'; git log --oneline; git status)",
+      "Bash(git remote set-url origin git@github.com:yangyang-lgtm/test-pre.git && git remote -v)",
+      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=10 -T git@github.com 2>&1 | head -3)",
+      "Bash(pytest:*)",
+      "Bash(pytest -vsx third_party/privateuse/test/cases/test_add.py 2>&1 | head -100)"
     ]
   }
 }
