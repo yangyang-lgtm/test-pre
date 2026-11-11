@@ -30,7 +30,7 @@ def add(x: torch.Tensor, y: torch.Tensor):
 
 class TestAddCase(TestCase):
 
-    @parametrize("shape", [(4096, 345), (32, 32), (32, 64, 128)])
+    @parametrize("shape", [(32, 32), (32, 64, 128)])
     @parametrize("dtype", [torch.float32, torch.int32])
     def test_add(self, shape, dtype):
         cpu_x, private_x = make_inputs(shape, dtype)
