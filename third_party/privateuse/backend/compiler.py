@@ -171,6 +171,7 @@ def _specialize_ir(module, grid, constants):
     privateuse.add_specialize_kernel(pm, constants, [int(dim) for dim in grid])
     passes.common.add_cse(pm)
     passes.common.add_canonicalizer(pm)
+    privateuse.add_analyze_access(pm)
     pm.run(module, 'specialize_kernel')
     return module
 

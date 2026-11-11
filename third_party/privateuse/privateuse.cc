@@ -1,3 +1,4 @@
+#include "privateuse/Conversion/Passes.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
 #include "privateuse/Transform/SpecializeKernel/SpecializeKernel.h"
 
@@ -64,4 +65,6 @@ void init_triton_privateuse(py::module_& m)
     },
     py::arg("pm"), py::arg("constants"), py::arg("grid")
   );
+
+  m.def("add_analyze_access", [](PassManager& pm) { pm.addPass(triton::createAnalyzeAccessPass()); }, py::arg("pm"));
 }
