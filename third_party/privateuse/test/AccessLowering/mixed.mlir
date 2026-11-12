@@ -1,9 +1,7 @@
 // RUN: privateuse-opt %s -privateuse-lower-structured-access -privateuse-lower-unstructured-access \
-// RUN:   -privateuse-ptr-to-memref -canonicalize | FileCheck %s --implicit-check-not=pumem.
+// RUN:   -privateuse-ptr-to-memref -canonicalize | FileCheck %s
 
 module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
-  // 同一个函数里混有可分析与不可分析的访存：前者转 memref，后者保持 tt 形态。
-  // 标量 mask（运行时条件的 splat）无法按维度分析，是 remaining 的唯一形态。
   tt.func @mixed(%src: !tt.ptr<f32>, %dst: !tt.ptr<f32>) {
     %pid = tt.get_program_id x : i32
     %c4 = arith.constant 4 : i32
@@ -40,8 +38,6 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     tt.return
   }
 
-  // 循环携带的指针 iter_arg 只被未降级的 masked load（标量 mask）消费：init 的 +4
-  // 偏移必须保留（链不能被 token 化），循环保持 tensor-of-pointer 形态。
   tt.func @loop_carried(%p: !tt.ptr<f32>, %n: i32) {
     %pid = tt.get_program_id x : i32
     %c0 = arith.constant 0 : i32
@@ -66,8 +62,6 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     tt.return
   }
 
-  // bool 链经 tt.bitcast（i1→i8）：i1 指针按存储宽度映射为 memref<?xi8>；未降级的
-  // masked store（标量 mask）保持 splat/addptr/bitcast 链，由签名 ucc 桥接回 !tt.ptr<i1>。
   tt.func @bool_masked(%src: !tt.ptr<i8>, %dst: !tt.ptr<i1>) {
     %pid = tt.get_program_id x : i32
     %c4 = arith.constant 4 : i32
@@ -87,18 +81,13 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
 
 // CHECK-LABEL: tt.func @mixed(
 // CHECK-SAME: %arg0: memref<?xf32>, %arg1: memref<?xf32>
-// CHECK-DAG: %[[SRC:.*]] = builtin.unrealized_conversion_cast %arg0 : memref<?xf32> to !tt.ptr<f32>
-// CHECK-DAG: %[[DST:.*]] = builtin.unrealized_conversion_cast %arg1 : memref<?xf32> to !tt.ptr<f32>
-// CHECK-DAG: %[[PS:.*]] = tt.splat %[[SRC]] : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
-// CHECK-DAG: %[[P:.*]] = tt.addptr %[[PS]], %{{.*}} : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
-// CHECK-DAG: %[[QS:.*]] = tt.splat %[[DST]] : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
-// CHECK-DAG: %[[Q:.*]] = tt.addptr %[[QS]], %{{.*}} : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
 // CHECK-DAG: memref.reinterpret_cast %arg0 to offset: [0], sizes: [8], strides: [1] : memref<?xf32> to memref<8xf32, strided<[1]>>
 // CHECK-DAG: memref.reinterpret_cast %arg1 to offset: [0], sizes: [8], strides: [1] : memref<?xf32> to memref<8xf32, strided<[1]>>
 // CHECK-DAG: memref.copy
 // CHECK-DAG: memref.copy
-// CHECK-DAG: tt.load %[[P]], %{{.*}} : tensor<8x!tt.ptr<f32>>
-// CHECK-DAG: tt.store %[[Q]], %{{.*}}, %{{.*}} : tensor<8x!tt.ptr<f32>>
+// CHECK: bufferization.to_buffer {{.*}} : tensor<8xi1> to memref<8xi1, 128>
+// CHECK: pumem.gather {{.*}} : memref<?xf32>, memref<8xi32, 128>, memref<8xf32, 128>, memref<8xi1, 128>, f32
+// CHECK: pumem.scatter {{.*}} : memref<8xf32, 128>, memref<8xi32, 128>, memref<?xf32>, memref<8xi1, 128>
 // CHECK: tt.return
 
 // CHECK-LABEL: tt.func @dynamic_step(
@@ -128,11 +117,7 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
 
 // CHECK-LABEL: tt.func @bool_masked(
 // CHECK-SAME: %arg0: memref<?xi8>, %arg1: memref<?xi8>
-// CHECK-DAG: %[[DST:.*]] = builtin.unrealized_conversion_cast %arg1 : memref<?xi8> to !tt.ptr<i1>
-// CHECK-DAG: %[[DS:.*]] = tt.splat %[[DST]] : !tt.ptr<i1> -> tensor<8x!tt.ptr<i1>>
-// CHECK-DAG: %[[D:.*]] = tt.addptr %[[DS]], {{.*}} : tensor<8x!tt.ptr<i1>>, tensor<8xi32>
-// CHECK-DAG: %[[DB:.*]] = tt.bitcast %[[D]] : tensor<8x!tt.ptr<i1>> -> tensor<8x!tt.ptr<i8>>
-// CHECK-DAG: memref.reinterpret_cast %arg0 to offset: [0], sizes: [8], strides: [1] : memref<?xi8> to memref<8xi8, strided<[1]>>
-// CHECK-DAG: memref.copy
-// CHECK: tt.store %[[DB]], {{.*}}, {{.*}} : tensor<8x!tt.ptr<i8>>
+// CHECK: memref.reinterpret_cast %arg0 to offset: [0], sizes: [8], strides: [1] : memref<?xi8> to memref<8xi8, strided<[1]>>
+// CHECK: memref.copy
+// CHECK: pumem.scatter {{.*}} : memref<8xi8, 128>, memref<8xi32, 128>, memref<?xi8>, memref<8xi1, 128>
 // CHECK: tt.return

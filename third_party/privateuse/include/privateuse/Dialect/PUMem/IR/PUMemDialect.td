@@ -30,23 +30,28 @@ def PUMem_GetPhysicalIdOp : PUMEM_Op<"get_physical_id", [Pure]> {
   let assemblyFormat = "attr-dict `:` type($id)";
 }
 
-def PUMem_GatherOp : PUMEM_Op<"gather"> {
+def PUMem_GatherOp : PUMEM_Op<"gather", [AttrSizedOperandSegments]> {
   let summary = "Gather elements from a flat buffer into a tile";
 
   let description = [{
     Writes one element into the destination tile for every element of the
     offset buffer, both shaped alike:
 
-      destination[i] = source[indices[i]]
+      destination[i] = mask[i] ? source[indices[i]] : other
 
-    `source` is a flat runtime buffer addressed in elements; `indices` is a
-    runtime buffer of element offsets. The op has no results and mutates the
-    destination tile in place, like memref.copy.
+    Without a mask every element is gathered, as if the mask were all true.
+    Masked-off lanes never read source and take `other`, a scalar of the source
+    element type; without `other` they are left untouched. `source` is a flat
+    runtime buffer addressed in elements; `indices` is a runtime buffer of
+    element offsets. The op has no results and mutates the destination tile in
+    place, like memref.copy.
   }];
   let arguments = (ins Arg<AnyMemRef, "flat buffer read at the given element offsets", [MemRead]>:$source,
                        Arg<AnyMemRef, "per-element offsets", [MemRead]>:$indices,
-                       Arg<AnyMemRef, "tile written with the gathered values", [MemWrite]>:$destination);
-  let assemblyFormat = "$source `,` $indices `,` $destination attr-dict `:` type($source) `,` type($indices) `,` type($destination)";
+                       Arg<AnyMemRef, "tile written with the gathered values", [MemWrite]>:$destination,
+                       Optional<AnyMemRef>:$mask,
+                       Optional<AnyType>:$other);
+  let assemblyFormat = "$source `,` $indices `,` $destination (`,` $mask^)? (`,` $other^)? attr-dict `:` type($source) `,` type($indices) `,` type($destination) (`,` type($mask)^)? (`,` type($other)^)?";
   let hasVerifier = 1;
 }
 
@@ -59,14 +64,16 @@ def PUMem_ScatterOp : PUMEM_Op<"scatter"> {
 
       destination[indices[i]] = source[i]
 
-    `destination` is a flat runtime buffer addressed in elements; `indices` is
-    a runtime buffer of element offsets. The op has no results and mutates the
-    destination buffer in place, like memref.copy.
+    With a mask, masked-off lanes are neither read nor written. `destination` is
+    a flat runtime buffer addressed in elements; `indices` is a runtime buffer of
+    element offsets. The op has no results and mutates the destination buffer in
+    place, like memref.copy.
   }];
   let arguments = (ins Arg<AnyMemRef, "tile read in order", [MemRead]>:$source,
                        Arg<AnyMemRef, "per-element offsets", [MemRead]>:$indices,
-                       Arg<AnyMemRef, "flat buffer written at the given element offsets", [MemWrite]>:$destination);
-  let assemblyFormat = "$source `,` $indices `,` $destination attr-dict `:` type($source) `,` type($indices) `,` type($destination)";
+                       Arg<AnyMemRef, "flat buffer written at the given element offsets", [MemWrite]>:$destination,
+                       Optional<AnyMemRef>:$mask);
+  let assemblyFormat = "$source `,` $indices `,` $destination (`,` $mask^)? attr-dict `:` type($source) `,` type($indices) `,` type($destination) (`,` type($mask)^)?";
   let hasVerifier = 1;
 }
 

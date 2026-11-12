@@ -22,11 +22,16 @@ class ConstantOp;
 class MulIOp;
 } // namespace arith
 
+namespace scf {
+class ForOp;
+} // namespace scf
+
 namespace triton {
 
 class BroadcastOp;
 class ExpandDimsOp;
 class MakeRangeOp;
+class ReshapeOp;
 class SplatOp;
 
 enum class DeferredReason : uint8_t {
@@ -92,6 +97,9 @@ public:
 
   FailureOr<AccessInfo> analyze(Operation* op);
   FailureOr<Value> materializeIndex(const ExprPtr& expr, OpBuilder& builder, Location loc);
+  FailureOr<Value> materializeBoundCount(const LinearBound& bound, OpBuilder& builder, Location loc);
+  FailureOr<Value> materializeDimSize(ArrayRef<LinearBound> bounds, int64_t dimSize, OpBuilder& builder, Location loc);
+  FailureOr<SmallVector<Value>> materializeMaskSizes(const AccessInfo& info, OpBuilder& builder, Location loc);
 
 private:
   FailureOr<AccessInfo> analyzeAccess(Value ptr, Value mask, bool isLoad, Location loc);
@@ -104,6 +112,7 @@ private:
   FailureOr<AccessView> buildMakeRange(MakeRangeOp op, ArrayRef<int64_t> shape);
   FailureOr<AccessView> buildExpandDims(ExpandDimsOp op, ArrayRef<int64_t> shape);
   FailureOr<AccessView> buildBroadcast(BroadcastOp op, ArrayRef<int64_t> shape);
+  FailureOr<AccessView> buildReshape(ReshapeOp op, ArrayRef<int64_t> shape);
   FailureOr<AccessView> buildMultiply(arith::MulIOp op);
   FailureOr<AccessView> buildBlockArgument(BlockArgument arg);
   FailureOr<AccessView> buildScalarLeaf(Value value);
@@ -122,6 +131,7 @@ private:
 
   void classifyMask(AccessMask& mask, ArrayRef<int64_t> sizes);
   unsigned loopId(Operation* loop);
+  void recordLoopIv(scf::ForOp loop);
 
   SymbolBounds bounds;
   llvm::DenseMap<Operation*, unsigned> loopIds;

@@ -169,7 +169,7 @@ def _specialize_ir(module, grid, constants):
     pm = ir.pass_manager(module.context)
     pm.enable_debug()
     privateuse.add_specialize_kernel(pm, constants, [int(dim) for dim in grid])
-    passes.common.add_cse(pm)
+    passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
     passes.common.add_canonicalizer(pm)
     privateuse.add_analyze_access(pm)
     privateuse.add_lower_structured_access(pm)

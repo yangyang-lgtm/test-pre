@@ -31,6 +31,16 @@ LogicalResult mlir::pumem::GatherOp::verify()
   if (indices.getShape() != destination.getShape()) return emitOpError("indices and destination shapes must match");
   if (source.getElementType() != destination.getElementType())
     return emitOpError("source and destination element types must match");
+  if (auto mask = getMask()) {
+    auto maskType = dyn_cast<MemRefType>(mask.getType());
+    if (!maskType) return emitOpError("mask must be a ranked memref");
+    if (!maskType.getElementType().isInteger(1)) return emitOpError("mask must have i1 element type");
+    if (maskType.getShape() != indices.getShape()) return emitOpError("mask and indices shapes must match");
+  }
+  if (auto other = getOther()) {
+    if (!getMask()) return emitOpError("other requires a mask");
+    if (other.getType() != source.getElementType()) return emitOpError("other must match the source element type");
+  }
   return success();
 }
 
@@ -45,5 +55,11 @@ LogicalResult mlir::pumem::ScatterOp::verify()
   if (indices.getShape() != source.getShape()) return emitOpError("indices and source shapes must match");
   if (source.getElementType() != destination.getElementType())
     return emitOpError("source and destination element types must match");
+  if (auto mask = getMask()) {
+    auto maskType = dyn_cast<MemRefType>(mask.getType());
+    if (!maskType) return emitOpError("mask must be a ranked memref");
+    if (!maskType.getElementType().isInteger(1)) return emitOpError("mask must have i1 element type");
+    if (maskType.getShape() != source.getShape()) return emitOpError("mask and source shapes must match");
+  }
   return success();
 }

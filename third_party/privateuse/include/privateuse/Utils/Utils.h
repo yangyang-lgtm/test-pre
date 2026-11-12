@@ -2,18 +2,33 @@
 #define PRIVATEUSE_UTILITY_H
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/Location.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/IR/Value.h"
 #include "privateuse/Utils/Constants.h"
+
+#include "llvm/ADT/ArrayRef.h"
 
 #include <cstdint>
 
 namespace mlir {
+
+class OpBuilder;
+
 namespace triton {
+
+class LoadOp;
 
 bool isPtrTypeLike(Type t);
 
 // Triton stores i1 elements in one byte, so i1 and i8 pointers alias the same storage.
 Type storageElementType(Type element);
+
+Value maskedFillValue(LoadOp load, Type elementType, OpBuilder& builder, Location loc);
+
+Value createBufferWindow(
+  OpBuilder& builder, Location loc, Value buf, ArrayRef<int64_t> shape, ArrayRef<Value> dimSizes
+);
 
 class Int128
 {

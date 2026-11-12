@@ -12,7 +12,9 @@
 // CHECK-NEXT: [privateuse-access] op 10: tt.load rank=2 elem_bytes=4 offset=0 dims=[dim0={start:0,stride:64,size:64}, dim1={start:0,stride:1,size:64}] mask=box dim1=[((0 - (pid.x + 16)) + 1*i < 0)] deferred=none
 // CHECK-NEXT: [privateuse-access] op 11: tt.load rank=3 elem_bytes=4 offset=0 dims=[dim0={start:0,stride:512,size:8}, dim1={start:0,stride:32,size:16}, dim2={start:0,stride:1,size:32}] mask=none deferred=none
 // CHECK-NEXT: [privateuse-access] op 12: tt.load rank=1 elem_bytes=4 offset=0 dims=[dim0={start:5,stride:0,size:8}] mask=none deferred=none
-// CHECK-NEXT: [privateuse-access] summary ops=12 loads=8 stores=4 atomics=0 descriptors=0 deferred=0 errors=0 reasons={}
+// CHECK-NEXT: [privateuse-access] op 13: tt.load rank=1 elem_bytes=4 offset=0 dims=[dim0={start:0,stride:1,size:128}] mask=none deferred=none
+// CHECK-NEXT: [privateuse-access] op 14: tt.load rank=1 elem_bytes=4 offset=(pid.x * 32) dims=[dim0={start:0,stride:1,size:128}] mask=all_true deferred=none
+// CHECK-NEXT: [privateuse-access] summary ops=14 loads=10 stores=4 atomics=0 descriptors=0 deferred=0 errors=0 reasons={}
 
 module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
   tt.func @scalar(%p: !tt.ptr<f32>, %m: i1) {
@@ -121,6 +123,31 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     %pS = tt.splat %p : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
     %a = tt.addptr %pS, %bc : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
     %v = tt.load %a : tensor<8x!tt.ptr<f32>>
+    tt.return
+  }
+
+  tt.func @reshape_address(%p: !tt.ptr<f32>) {
+    %r = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32>
+    %e = tt.reshape %r : tensor<128xi32> -> tensor<1x128xi32>
+    %c = tt.reshape %e : tensor<1x128xi32> -> tensor<128xi32>
+    %pS = tt.splat %p : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
+    %a = tt.addptr %pS, %c : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
+    %v = tt.load %a : tensor<128x!tt.ptr<f32>>
+    tt.return
+  }
+
+  tt.func @mask_negative_stride(%p: !tt.ptr<f32>) {
+    %pid = tt.get_program_id x : i32
+    %c32 = arith.constant 32 : i32
+    %pidOff = arith.muli %pid, %c32 : i32
+    %pidS = tt.splat %pidOff : i32 -> tensor<128xi32>
+    %r = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32>
+    %idx = arith.addi %pidS, %r : tensor<128xi32>
+    %zero = arith.constant dense<0> : tensor<128xi32>
+    %mask = arith.cmpi sge, %idx, %zero : tensor<128xi32>
+    %pS = tt.splat %p : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
+    %a = tt.addptr %pS, %idx : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
+    %v = tt.load %a, %mask : tensor<128x!tt.ptr<f32>>
     tt.return
   }
 }

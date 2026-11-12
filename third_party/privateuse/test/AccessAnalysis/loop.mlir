@@ -1,7 +1,8 @@
 // RUN: privateuse-opt %s -privateuse-analyze-access -verify-diagnostics -o /dev/null 2>&1 | FileCheck %s
 
 // CHECK: [privateuse-access] op 1: tt.load rank=1 elem_bytes=4 offset=((pid.x * 128) + (iv0 * 32)) dims=[dim0={start:0,stride:1,size:128}] mask=none deferred=none
-// CHECK-NEXT: [privateuse-access] summary ops=2 loads=2 stores=0 atomics=0 descriptors=0 deferred=0 errors=1 reasons={}
+// CHECK-NEXT: [privateuse-access] op 3: tt.load rank=1 elem_bytes=4 offset=iv1 dims=[dim0={start:0,stride:1,size:128}] mask=all_true deferred=none
+// CHECK-NEXT: [privateuse-access] summary ops=3 loads=3 stores=0 atomics=0 descriptors=0 deferred=0 errors=1 reasons={}
 
 module attributes {privateuse.grid = array<i64: 4, 1, 1>} {
   tt.func @loop_carried(%p: !tt.ptr<f32>, %n: i32) {
@@ -38,6 +39,26 @@ module attributes {privateuse.grid = array<i64: 4, 1, 1>} {
       %sum = arith.addf %acc, %v : tensor<128xf32>
       %next = tt.addptr %ptr, %stepS : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
       scf.yield %next, %sum : tensor<128x!tt.ptr<f32>>, tensor<128xf32>
+    }
+    tt.return
+  }
+
+  tt.func @loop_iv_mask_bound(%p: !tt.ptr<f32>) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c32 = arith.constant 32 : i32
+    %pid = tt.get_program_id x : i32
+    %pidp1 = arith.addi %pid, %c1 : i32
+    %upper = arith.muli %pidp1, %c32 : i32
+    %r = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32>
+    %zero = arith.constant dense<0> : tensor<128xi32>
+    %pS = tt.splat %p : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
+    scf.for %iv = %c0 to %upper step %c32 : i32 {
+      %s = tt.splat %iv : i32 -> tensor<128xi32>
+      %idx = arith.addi %s, %r : tensor<128xi32>
+      %mask = arith.cmpi sge, %idx, %zero : tensor<128xi32>
+      %a = tt.addptr %pS, %idx : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
+      %v = tt.load %a, %mask : tensor<128x!tt.ptr<f32>>
     }
     tt.return
   }

@@ -99,8 +99,6 @@ int64_t ceilDiv(int64_t lhs, int64_t rhs)
   return quotient;
 }
 
-// A store tile may overlap on its full view while the box-masked prefix window
-// it actually writes is still injective (conv output tiles pad each row).
 bool isMaskWindowInjective(const AccessInfo& info)
 {
   if (!info.mask.present || info.mask.allTrue) return false;
@@ -108,7 +106,6 @@ bool isMaskWindowInjective(const AccessInfo& info)
   AccessView window = info.view;
   for (auto [d, dim] : llvm::enumerate(window.dims)) {
     for (const LinearBound& bound : info.mask.dimBounds[d]) {
-      // A lower bound is not a prefix window; the lowering reports it as an error.
       if (bound.lower) return false;
       if (!bound.offset->isConst() || bound.offset->value == std::numeric_limits<int64_t>::min()) return false;
       int64_t limit = -bound.offset->value;
@@ -129,12 +126,10 @@ bool isLowerable(const AccessInfo& info, Type pointerType, Operation* op, triton
   if (!base || base.getOwner() != &func.getBody().front()) return false;
   auto baseType = dyn_cast<triton::PointerType>(base.getType());
   if (!baseType) return false;
-  auto accessType =
-    cast<triton::PointerType>(isa<RankedTensorType>(pointerType)
-                                ? cast<RankedTensorType>(pointerType).getElementType()
-                                : pointerType);
+  auto accessType = cast<triton::PointerType>(
+    isa<RankedTensorType>(pointerType) ? cast<RankedTensorType>(pointerType).getElementType() : pointerType
+  );
   auto pointee = accessType.getPointeeType();
-  // i1 access values would need type adaptation; only i1-pointer chains bitcast to i8 lower.
   if (storageElementType(pointee) != pointee) return false;
   return storageElementType(baseType.getPointeeType()) == storageElementType(pointee);
 }
@@ -185,66 +180,10 @@ private:
     return UnrealizedConversionCastOp::create(builder, loc, tokenType, info.view.base).getResult(0);
   }
 
-  FailureOr<Value> materializeBoundCount(const LinearBound& bound, OpBuilder& builder, Location loc)
+  FailureOr<Value>
+  materializeView(OpBuilder& builder, Location loc, const AccessInfo& info, Type pointee, ArrayRef<Value> dimSizes = {})
   {
-    FailureOr<Value> offset = analyzer.materializeIndex(bound.offset, builder, loc);
-    if (failed(offset)) return failure();
-
-    Value zero  = arith::ConstantIndexOp::create(builder, loc, 0);
-    Value limit = arith::SubIOp::create(builder, loc, zero, *offset);
-    Value step  = arith::ConstantIndexOp::create(builder, loc, bound.stride);
-    Value count = bound.strict ? Value(arith::CeilDivSIOp::create(builder, loc, limit, step))
-                               : Value(arith::FloorDivSIOp::create(builder, loc, limit, step));
-    if (!bound.strict)
-      count = arith::AddIOp::create(builder, loc, count, arith::ConstantIndexOp::create(builder, loc, 1));
-    return Value(arith::MaxSIOp::create(builder, loc, zero, count));
-  }
-
-  FailureOr<Value> materializeDimSize(ArrayRef<LinearBound> bounds, int64_t dimSize, OpBuilder& builder, Location loc)
-  {
-    Value size;
-    for (const LinearBound& bound : bounds) {
-      if (bound.lower) {
-        emitError(loc, "mask bounds with a lower bound are unsupported");
-        return failure();
-      }
-      FailureOr<Value> count = materializeBoundCount(bound, builder, loc);
-      if (failed(count)) return failure();
-      size = size ? Value(arith::MinSIOp::create(builder, loc, size, *count)) : *count;
-    }
-    if (!size) return size;
-    return Value(arith::MinSIOp::create(builder, loc, size, arith::ConstantIndexOp::create(builder, loc, dimSize)));
-  }
-
-  FailureOr<SmallVector<Value>> materializeMaskSizes(const AccessInfo& info, OpBuilder& builder, Location loc)
-  {
-    SmallVector<Value> sizes(info.view.dims.size());
-    for (auto [d, dim] : llvm::enumerate(info.view.dims)) {
-      FailureOr<Value> size = materializeDimSize(info.mask.dimBounds[d], dim.size, builder, loc);
-      if (failed(size)) return failure();
-      sizes[d] = *size;
-    }
-    return sizes;
-  }
-
-  Value createBufferWindow(OpBuilder& builder, Location loc, Value buf, RankedTensorType type, ArrayRef<Value> dimSizes)
-  {
-    SmallVector<OpFoldResult> offsets;
-    SmallVector<OpFoldResult> sizes;
-    SmallVector<OpFoldResult> strides;
-    for (auto [d, dimSize] : llvm::enumerate(type.getShape())) {
-      offsets.push_back(builder.getIndexAttr(0));
-      sizes.push_back(dimSizes[d] ? OpFoldResult(dimSizes[d]) : OpFoldResult(builder.getIndexAttr(dimSize)));
-      strides.push_back(builder.getIndexAttr(1));
-    }
-    return memref::SubViewOp::create(builder, loc, buf, offsets, sizes, strides);
-  }
-
-  FailureOr<Value> materializeView(
-    OpBuilder& builder, Location loc, const AccessInfo& info, Type pointee, ArrayRef<Value> dimSizes = {}
-  )
-  {
-    Value base     = materializeBase(info, pointee, builder, loc);
+    Value base = materializeBase(info, pointee, builder, loc);
 
     ExprPtr total = info.view.offset;
     SmallVector<int64_t> sizes;
@@ -252,7 +191,7 @@ private:
     SmallVector<OpFoldResult> sizeAttrs;
     SmallVector<OpFoldResult> strideAttrs;
     for (auto [d, dim] : llvm::enumerate(info.view.dims)) {
-      total = ScalarExpr::add(std::move(total), dim.start);
+      total         = ScalarExpr::add(std::move(total), dim.start);
       Value dynamic = d < dimSizes.size() ? dimSizes[d] : Value();
       sizes.push_back(dynamic ? ShapedType::kDynamic : dim.size);
       strides.push_back(dim.stride);
@@ -271,9 +210,9 @@ private:
   LogicalResult lowerScalarLoad(LoadOp load, const AccessInfo& info)
   {
     OpBuilder builder(load);
-    Location loc             = load.getLoc();
-    Value base               = materializeBase(info, load.getType(), builder, loc);
-    FailureOr<Value> offset  = analyzer.materializeIndex(info.view.offset, builder, loc);
+    Location loc            = load.getLoc();
+    Value base              = materializeBase(info, load.getType(), builder, loc);
+    FailureOr<Value> offset = analyzer.materializeIndex(info.view.offset, builder, loc);
     if (failed(offset)) return failure();
 
     Value value = memref::LoadOp::create(builder, loc, base, *offset);
@@ -285,27 +224,14 @@ private:
   LogicalResult lowerScalarStore(StoreOp store, const AccessInfo& info)
   {
     OpBuilder builder(store);
-    Location loc             = store.getLoc();
-    Value base               = materializeBase(info, store.getValue().getType(), builder, loc);
-    FailureOr<Value> offset  = analyzer.materializeIndex(info.view.offset, builder, loc);
+    Location loc            = store.getLoc();
+    Value base              = materializeBase(info, store.getValue().getType(), builder, loc);
+    FailureOr<Value> offset = analyzer.materializeIndex(info.view.offset, builder, loc);
     if (failed(offset)) return failure();
 
     memref::StoreOp::create(builder, loc, store.getValue(), base, *offset);
     store->erase();
     return success();
-  }
-
-  Value maskedFillValue(LoadOp load, Type elementType, OpBuilder& builder, Location loc)
-  {
-    Value other = load.getOther();
-    if (!other)
-      return arith::ConstantOp::create(builder, loc, elementType, builder.getZeroAttr(elementType));
-    if (auto splat = other.getDefiningOp<SplatOp>()) return splat.getSrc();
-    if (auto cst = other.getDefiningOp<arith::ConstantOp>())
-      if (auto dense = dyn_cast<DenseElementsAttr>(cst.getValue()); dense && dense.isSplat())
-        return arith::ConstantOp::create(builder, loc, elementType, dense.getSplatValue<TypedAttr>());
-    load.emitError("masked load with non-splat 'other' is unsupported");
-    return {};
   }
 
   LogicalResult lowerLoad(LoadOp load, const AccessInfo& info)
@@ -318,7 +244,7 @@ private:
     bool masked  = info.mask.present && !info.mask.allTrue;
     SmallVector<Value> dimSizes;
     if (masked) {
-      FailureOr<SmallVector<Value>> sizes = materializeMaskSizes(info, builder, loc);
+      FailureOr<SmallVector<Value>> sizes = analyzer.materializeMaskSizes(info, builder, loc);
       if (failed(sizes)) return failure();
       dimSizes = std::move(*sizes);
     }
@@ -332,10 +258,10 @@ private:
     );
     Value dst = buf;
     if (masked) {
-      Value fillValue = maskedFillValue(load, elementType, builder, loc);
+      Value fillValue = triton::maskedFillValue(load, elementType, builder, loc);
       if (!fillValue) return failure();
       linalg::FillOp::create(builder, loc, ValueRange{fillValue}, ValueRange{buf});
-      dst = createBufferWindow(builder, loc, buf, tensorType, dimSizes);
+      dst = createBufferWindow(builder, loc, buf, tensorType.getShape(), dimSizes);
     }
     memref::CopyOp::create(builder, loc, *view, dst);
     Value tensor =
@@ -355,7 +281,7 @@ private:
     bool masked  = info.mask.present && !info.mask.allTrue;
     SmallVector<Value> dimSizes;
     if (masked) {
-      FailureOr<SmallVector<Value>> sizes = materializeMaskSizes(info, builder, loc);
+      FailureOr<SmallVector<Value>> sizes = analyzer.materializeMaskSizes(info, builder, loc);
       if (failed(sizes)) return failure();
       dimSizes = std::move(*sizes);
     }
@@ -366,7 +292,7 @@ private:
     Value buf = bufferization::ToBufferOp::create(
       builder, loc, sramBufferType(tensorType, builder), store.getValue(), /*read_only=*/true
     );
-    Value src = masked ? createBufferWindow(builder, loc, buf, tensorType, dimSizes) : buf;
+    Value src = masked ? createBufferWindow(builder, loc, buf, tensorType.getShape(), dimSizes) : buf;
     memref::CopyOp::create(builder, loc, src, *view);
     store->erase();
     return success();
@@ -406,7 +332,7 @@ struct LowerStructuredAccessPass : public ::impl::LowerStructuredAccessBase<Lowe
 
   void getDependentDialects(DialectRegistry& registry) const override
   {
-    // chang-format off
+    // clang-format off
     registry.insert<
       arith::ArithDialect,
       bufferization::BufferizationDialect,
@@ -414,7 +340,7 @@ struct LowerStructuredAccessPass : public ::impl::LowerStructuredAccessBase<Lowe
       memref::MemRefDialect,
       tensor::TensorDialect
     >();
-    // chang-format on
+    // clang-format on
   }
 
   void runOnOperation() override

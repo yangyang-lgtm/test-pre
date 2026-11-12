@@ -1,9 +1,7 @@
 // RUN: privateuse-opt %s -privateuse-lower-structured-access -privateuse-lower-unstructured-access \
-// RUN:   -privateuse-ptr-to-memref -canonicalize | FileCheck %s --implicit-check-not=pumem. \
-// RUN:   --implicit-check-not=memref.
+// RUN:   -privateuse-ptr-to-memref -canonicalize | FileCheck %s
 
 module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
-  // 指针 base 是循环携带的 iter_arg 而非入口块参数：unstructured 不分解。
   tt.func @loop_base(%p: !tt.ptr<f32>, %dst: !tt.ptr<f32>, %n: i32) {
     %c0 = arith.constant 0 : i32
     %c1 = arith.constant 1 : i32
@@ -45,18 +43,22 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     tt.store %a, %v {ignore_cta} : tensor<8x!tt.ptr<f32>>
     tt.return
   }
+
 }
 
 // CHECK-LABEL: tt.func @loop_base(
-// CHECK-SAME: %arg0: !tt.ptr<f32>
+// CHECK-SAME: %arg0: memref<?xf32>
 // CHECK: scf.for
 // CHECK: tt.load
 // CHECK: scf.yield
+// CHECK: pumem.scatter
 
 // CHECK-LABEL: tt.func @volatile_load(
 // CHECK-SAME: %arg0: !tt.ptr<f32>
+// CHECK-NOT: pumem.
 // CHECK: tt.load
 
 // CHECK-LABEL: tt.func @ignore_cta_store(
 // CHECK-SAME: %arg0: !tt.ptr<f32>
+// CHECK-NOT: pumem.
 // CHECK: tt.store

@@ -16,6 +16,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include <algorithm>
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -344,6 +345,36 @@ unsigned AccessAnalyzer::loopId(Operation* loop)
   return id;
 }
 
+void AccessAnalyzer::recordLoopIv(scf::ForOp loop)
+{
+  unsigned id  = loopId(loop);
+  ivValues[id] = loop.getInductionVar();
+
+  DeferredReason saved = deferred;
+  auto restore         = llvm::scope_exit([&] { deferred = saved; });
+  ScopedDiagnosticHandler handler(loop->getContext(), [](Diagnostic&) {});
+
+  FailureOr<ExprPtr> lowerExpr = buildScalar(loop.getLowerBound());
+  FailureOr<ExprPtr> upperExpr = buildScalar(loop.getUpperBound());
+  FailureOr<ExprPtr> stepExpr  = buildScalar(loop.getStep());
+  if (failed(lowerExpr) || failed(upperExpr) || failed(stepExpr)) return;
+  if (!*stepExpr || !(*stepExpr)->isConst() || (*stepExpr)->value <= 0) return;
+
+  Interval lower = rangeOfExpr(*lowerExpr, bounds);
+  Interval upper = rangeOfExpr(*upperExpr, bounds);
+  if (!lower.hasLo || !upper.hasHi) return;
+
+  int64_t last = 0;
+  if (!checkedSub(upper.hi, 1, last)) return;
+
+  Interval interval;
+  interval.hasLo     = true;
+  interval.hasHi     = true;
+  interval.lo        = lower.lo;
+  interval.hi        = std::max(lower.lo, last);
+  bounds.loopIvs[id] = interval;
+}
+
 FailureOr<ExprPtr> AccessAnalyzer::buildScalar(Value value)
 {
   if (auto cst = value.getDefiningOp<arith::ConstantOp>()) {
@@ -361,9 +392,8 @@ FailureOr<ExprPtr> AccessAnalyzer::buildScalar(Value value)
   if (auto arg = dyn_cast<BlockArgument>(value)) {
     if (auto loop = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp()))
       if (arg == loop.getInductionVar()) {
-        unsigned id  = loopId(loop);
-        ivValues[id] = arg;
-        return ScalarExpr::sym(SymKind::LoopIv, id);
+        recordLoopIv(loop);
+        return ScalarExpr::sym(SymKind::LoopIv, loopId(loop));
       }
     return emitFailure(value.getLoc(), "unsupported block argument in address expression");
   }
@@ -436,6 +466,55 @@ FailureOr<Value> AccessAnalyzer::materializeIndex(const ExprPtr& expr, OpBuilder
     case ScalarExpr::Kind::Xor: return arith::XOrIOp::create(builder, loc, *lhs, *rhs).getResult();
   }
   return emitFailure(loc, "unhandled scalar expression kind");
+}
+
+FailureOr<Value> AccessAnalyzer::materializeBoundCount(const LinearBound& bound, OpBuilder& builder, Location loc)
+{
+  FailureOr<Value> offset = materializeIndex(bound.offset, builder, loc);
+  if (failed(offset)) return failure();
+
+  Value zero  = arith::ConstantIndexOp::create(builder, loc, 0);
+  Value limit = arith::SubIOp::create(builder, loc, zero, *offset);
+  Value step  = arith::ConstantIndexOp::create(builder, loc, bound.stride);
+  Value count = bound.strict ? Value(arith::CeilDivSIOp::create(builder, loc, limit, step))
+                             : Value(arith::FloorDivSIOp::create(builder, loc, limit, step));
+  if (!bound.strict) {
+    Value one  = arith::ConstantIndexOp::create(builder, loc, 1);
+    Value sum  = arith::AddIOp::create(builder, loc, count, one);
+    Value wrap = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::slt, sum, count);
+    Value sat  = arith::ConstantIndexOp::create(builder, loc, std::numeric_limits<int64_t>::max());
+    count      = arith::SelectOp::create(builder, loc, wrap, sat, sum);
+  }
+  return Value(arith::MaxSIOp::create(builder, loc, zero, count));
+}
+
+FailureOr<Value>
+AccessAnalyzer::materializeDimSize(ArrayRef<LinearBound> bounds, int64_t dimSize, OpBuilder& builder, Location loc)
+{
+  Value size;
+  for (const LinearBound& bound : bounds) {
+    if (bound.lower) {
+      emitError(loc, "mask bounds with a lower bound are unsupported");
+      return failure();
+    }
+    FailureOr<Value> count = materializeBoundCount(bound, builder, loc);
+    if (failed(count)) return failure();
+    size = size ? arith::MinSIOp::create(builder, loc, size, *count) : *count;
+  }
+  if (!size) return size;
+  return Value(arith::MinSIOp::create(builder, loc, size, arith::ConstantIndexOp::create(builder, loc, dimSize)));
+}
+
+FailureOr<SmallVector<Value>>
+AccessAnalyzer::materializeMaskSizes(const AccessInfo& info, OpBuilder& builder, Location loc)
+{
+  SmallVector<Value> sizes(info.view.dims.size());
+  for (auto [d, dim] : llvm::enumerate(info.view.dims)) {
+    FailureOr<Value> size = materializeDimSize(info.mask.dimBounds[d], dim.size, builder, loc);
+    if (failed(size)) return failure();
+    sizes[d] = *size;
+  }
+  return sizes;
 }
 
 FailureOr<AccessView> AccessAnalyzer::scale(AccessView value, int64_t factor, Location loc)
@@ -527,8 +606,8 @@ FailureOr<AccessView> AccessAnalyzer::resolveIterArg(BlockArgument arg)
   if (failed(step)) return failure();
   if (step->base) return emitFailure(loc, "loop step carries a base pointer");
 
-  unsigned ivId        = loopId(loop);
-  ivValues[ivId]       = loop.getInductionVar();
+  unsigned ivId = loopId(loop);
+  recordLoopIv(loop);
   bool stepDependsOnIv = dependsOnLoopIv(step->offset, ivId);
   for (const AccessDim& dim : step->dims) stepDependsOnIv |= dependsOnLoopIv(dim.start, ivId);
   if (stepDependsOnIv || !areDimsStrideless(step->dims)) {
@@ -628,6 +707,42 @@ FailureOr<AccessView> AccessAnalyzer::buildBroadcast(BroadcastOp op, ArrayRef<in
   return src;
 }
 
+FailureOr<AccessView> AccessAnalyzer::buildReshape(ReshapeOp op, ArrayRef<int64_t> shape)
+{
+  if (op.getAllowReorder()) return emitFailure(op.getLoc(), "reorder reshape in address expression");
+
+  auto src = buildValue(op.getSrc());
+  if (failed(src)) return failure();
+
+  AccessView view;
+  view.base   = src->base;
+  view.offset = src->offset;
+
+  size_t next      = 0;
+  auto foldUnitDim = [&] {
+    view.offset = ScalarExpr::add(view.offset, src->dims[next].start);
+    ++next;
+  };
+
+  for (int64_t size : shape) {
+    while (next < src->dims.size() && size != 1 && src->dims[next].size == 1) foldUnitDim();
+    if (next < src->dims.size() && src->dims[next].size == size) {
+      view.dims.push_back(src->dims[next++]);
+    } else if (size == 1) {
+      view.dims.push_back(AccessDim{ScalarExpr::cst(0), 1, 0});
+    } else {
+      return emitFailure(op.getLoc(), "reshape changes the address layout");
+    }
+  }
+  while (next < src->dims.size()) {
+    if (src->dims[next].size != 1) return emitFailure(op.getLoc(), "reshape changes the address layout");
+    foldUnitDim();
+  }
+
+  if (failed(view.normalize(op.getType(), op.getLoc()))) return failure();
+  return view;
+}
+
 FailureOr<AccessView> AccessAnalyzer::buildMultiply(arith::MulIOp op)
 {
   auto lhs = buildValue(op.getLhs());
@@ -676,6 +791,7 @@ FailureOr<AccessView> AccessAnalyzer::buildValue(Value value)
   if (auto range = dyn_cast<MakeRangeOp>(def)) return buildMakeRange(range, shape);
   if (auto expand = dyn_cast<ExpandDimsOp>(def)) return buildExpandDims(expand, shape);
   if (auto broadcast = dyn_cast<BroadcastOp>(def)) return buildBroadcast(broadcast, shape);
+  if (auto reshape = dyn_cast<ReshapeOp>(def)) return buildReshape(reshape, shape);
   if (auto add = dyn_cast<AddPtrOp>(def))
     return combineValues(add.getPtr(), add.getOffset(), /*subtract=*/false, value);
   if (auto add = dyn_cast<arith::AddIOp>(def))
@@ -802,7 +918,6 @@ FailureOr<AccessMask> AccessAnalyzer::buildCompareMask(arith::CmpIOp op, size_t 
   if (varying.size() > 1) return emitFailure(loc, "mask couples several dimensions");
 
   size_t dimIndex = varying.front();
-  if (diff->dims[dimIndex].stride < 0) return emitFailure(loc, "mask involves a negative stride");
 
   ExprPtr offset = diff->offset;
   for (size_t d = 0; d < diff->dims.size(); ++d) {
@@ -811,10 +926,15 @@ FailureOr<AccessMask> AccessAnalyzer::buildCompareMask(arith::CmpIOp op, size_t 
   }
   offset = ScalarExpr::add(offset, diff->dims[dimIndex].start);
 
+  int64_t stride = diff->dims[dimIndex].stride;
+  bool lower     = stride < 0;
+  if (lower) {
+    offset = ScalarExpr::neg(offset);
+    stride = -stride;
+  }
+
   mask.dimBounds.resize(rank);
-  mask.dimBounds[dimIndex].push_back(
-    LinearBound{offset, diff->dims[dimIndex].stride, predicate->strict, /*lower=*/false}
-  );
+  mask.dimBounds[dimIndex].push_back(LinearBound{offset, stride, predicate->strict, lower});
   mask.allTrue = false;
   return mask;
 }
@@ -899,6 +1019,17 @@ FailureOr<AccessInfo> AccessAnalyzer::analyzeAccess(Value ptr, Value mask, bool 
       return failure();
     }
     info.mask = std::move(*builtMask);
+    for (size_t d = 0; d < info.mask.dimBounds.size(); ++d) {
+      int64_t dimSize = d < sizes.size() ? sizes[d] : 1;
+      for (const LinearBound& bound : info.mask.dimBounds[d]) {
+        if (!bound.lower) continue;
+        bool holds = false;
+        bool fails = false;
+        evaluateBound(bound, dimSize, bounds, holds, fails);
+        if (!holds) return AccessInfo::makeDeferred(DeferredReason::DataDependentOffset, isLoad);
+      }
+      llvm::erase_if(info.mask.dimBounds[d], [](const LinearBound& bound) { return bound.lower; });
+    }
   }
   classifyMask(info.mask, sizes);
 
