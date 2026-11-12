@@ -1,7 +1,7 @@
 // RUN: privateuse-opt %s -privateuse-analyze-access -verify-diagnostics -o /dev/null 2>&1 | FileCheck %s
 
 // CHECK: [privateuse-access] op 1: tt.load rank=1 elem_bytes=4 offset=((pid.x * 128) + (iv0 * 32)) dims=[dim0={start:0,stride:1,size:128}] mask=none deferred=none
-// CHECK-NEXT: [privateuse-access] op 3: tt.load rank=1 elem_bytes=4 offset=iv1 dims=[dim0={start:0,stride:1,size:128}] mask=all_true deferred=none
+// CHECK-NEXT: [privateuse-access] op 3: tt.load rank=1 elem_bytes=4 offset=iv1 dims=[dim0={start:0,stride:1,size:128}] mask=proven_true deferred=none
 // CHECK-NEXT: [privateuse-access] summary ops=3 loads=3 stores=0 atomics=0 descriptors=0 deferred=0 errors=1 reasons={}
 
 module attributes {privateuse.grid = array<i64: 4, 1, 1>} {

@@ -67,12 +67,17 @@ struct LinearBound
   bool lower     = false;
 };
 
+enum class MaskKind {
+  None,
+  ProvenTrue,
+  ProvenFalse,
+  ScalarDynamic,
+  Box,
+};
+
 struct AccessMask
 {
-  bool present       = false;
-  bool allTrue       = true;
-  bool allFalse      = false;
-  bool scalarDynamic = false;
+  MaskKind kind = MaskKind::None;
   SmallVector<SmallVector<LinearBound>> dimBounds;
 
   static AccessMask uniform(bool truth);
@@ -133,13 +138,13 @@ private:
   unsigned loopId(Operation* loop);
   void recordLoopIv(scf::ForOp loop);
 
-  SymbolBounds bounds;
-  llvm::DenseMap<Operation*, unsigned> loopIds;
-  unsigned nextLoopId = 0;
-  llvm::DenseSet<Value> resolving;
-  DeferredReason deferred        = DeferredReason::None;
-  std::array<Value, 3> pidValues = {};
-  llvm::DenseMap<unsigned, Value> ivValues;
+  SymbolBounds bounds_;
+  llvm::DenseMap<Operation*, unsigned> loopIds_;
+  unsigned nextLoopId_ = 0;
+  llvm::DenseSet<Value> resolving_;
+  DeferredReason deferred_        = DeferredReason::None;
+  std::array<Value, 3> pidValues_ = {};
+  llvm::DenseMap<unsigned, Value> ivValues_;
 };
 
 llvm::StringRef toString(DeferredReason reason);

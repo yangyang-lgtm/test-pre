@@ -34,10 +34,13 @@ std::string describeDims(const SmallVector<AccessDim>& dims)
 
 std::string describeMask(const AccessMask& mask)
 {
-  if (!mask.present) return "none";
-  if (mask.scalarDynamic) return "scalar";
-  if (mask.allFalse) return "all_false";
-  if (mask.allTrue) return "all_true";
+  switch (mask.kind) {
+    case MaskKind::None: return "none";
+    case MaskKind::ScalarDynamic: return "scalar";
+    case MaskKind::ProvenTrue: return "proven_true";
+    case MaskKind::ProvenFalse: return "proven_false";
+    case MaskKind::Box: break;
+  }
 
   std::string text = "box";
   llvm::raw_string_ostream os(text);

@@ -263,18 +263,14 @@ llvm::StringRef toString(DeferredReason reason)
 AccessMask AccessMask::uniform(bool truth)
 {
   AccessMask mask;
-  mask.present  = true;
-  mask.allTrue  = truth;
-  mask.allFalse = !truth;
+  mask.kind = truth ? MaskKind::ProvenTrue : MaskKind::ProvenFalse;
   return mask;
 }
 
 AccessMask AccessMask::dynamicScalar()
 {
   AccessMask mask;
-  mask.present       = true;
-  mask.allTrue       = false;
-  mask.scalarDynamic = true;
+  mask.kind = MaskKind::ScalarDynamic;
   return mask;
 }
 
@@ -327,31 +323,31 @@ AccessAnalyzer::AccessAnalyzer(ModuleOp module)
     for (int axis = 0; axis < 3 && axis < grid.size(); ++axis) {
       if (grid[axis] <= 0) continue;
       Interval interval;
-      interval.hasLo    = true;
-      interval.hasHi    = true;
-      interval.lo       = 0;
-      interval.hi       = grid[axis] - 1;
-      bounds.pids[axis] = interval;
+      interval.hasLo     = true;
+      interval.hasHi     = true;
+      interval.lo        = 0;
+      interval.hi        = grid[axis] - 1;
+      bounds_.pids[axis] = interval;
     }
   }
 }
 
 unsigned AccessAnalyzer::loopId(Operation* loop)
 {
-  auto it = loopIds.find(loop);
-  if (it != loopIds.end()) return it->second;
-  unsigned id   = nextLoopId++;
-  loopIds[loop] = id;
+  auto it = loopIds_.find(loop);
+  if (it != loopIds_.end()) return it->second;
+  unsigned id    = nextLoopId_++;
+  loopIds_[loop] = id;
   return id;
 }
 
 void AccessAnalyzer::recordLoopIv(scf::ForOp loop)
 {
-  unsigned id  = loopId(loop);
-  ivValues[id] = loop.getInductionVar();
+  unsigned id   = loopId(loop);
+  ivValues_[id] = loop.getInductionVar();
 
-  DeferredReason saved = deferred;
-  auto restore         = llvm::scope_exit([&] { deferred = saved; });
+  DeferredReason saved = deferred_;
+  auto restore         = llvm::scope_exit([&] { deferred_ = saved; });
   ScopedDiagnosticHandler handler(loop->getContext(), [](Diagnostic&) {});
 
   FailureOr<ExprPtr> lowerExpr = buildScalar(loop.getLowerBound());
@@ -360,19 +356,19 @@ void AccessAnalyzer::recordLoopIv(scf::ForOp loop)
   if (failed(lowerExpr) || failed(upperExpr) || failed(stepExpr)) return;
   if (!*stepExpr || !(*stepExpr)->isConst() || (*stepExpr)->value <= 0) return;
 
-  Interval lower = rangeOfExpr(*lowerExpr, bounds);
-  Interval upper = rangeOfExpr(*upperExpr, bounds);
+  Interval lower = rangeOfExpr(*lowerExpr, bounds_);
+  Interval upper = rangeOfExpr(*upperExpr, bounds_);
   if (!lower.hasLo || !upper.hasHi) return;
 
   int64_t last = 0;
   if (!checkedSub(upper.hi, 1, last)) return;
 
   Interval interval;
-  interval.hasLo     = true;
-  interval.hasHi     = true;
-  interval.lo        = lower.lo;
-  interval.hi        = std::max(lower.lo, last);
-  bounds.loopIvs[id] = interval;
+  interval.hasLo      = true;
+  interval.hasHi      = true;
+  interval.lo         = lower.lo;
+  interval.hi         = std::max(lower.lo, last);
+  bounds_.loopIvs[id] = interval;
 }
 
 FailureOr<ExprPtr> AccessAnalyzer::buildScalar(Value value)
@@ -385,7 +381,7 @@ FailureOr<ExprPtr> AccessAnalyzer::buildScalar(Value value)
   if (auto pid = value.getDefiningOp<GetProgramIdOp>()) {
     int axis = pid.getAxisAsInt();
     if (axis < 0 || axis >= 3) return emitFailure(value.getLoc(), "unsupported program id axis " + Twine(axis));
-    pidValues[axis] = pid.getResult();
+    pidValues_[axis] = pid.getResult();
     return ScalarExpr::sym(static_cast<SymKind>(static_cast<int>(SymKind::PidX) + axis));
   }
 
@@ -412,7 +408,7 @@ FailureOr<ExprPtr> AccessAnalyzer::buildScalar(Value value)
   }
 
   if (isa<LoadOp, DescriptorLoadOp>(def)) {
-    deferred = DeferredReason::DataDependentOffset;
+    deferred_ = DeferredReason::DataDependentOffset;
     return failure();
   }
 
@@ -421,7 +417,7 @@ FailureOr<ExprPtr> AccessAnalyzer::buildScalar(Value value)
 
 Value AccessAnalyzer::materializeSymbol(SymKind kind, unsigned id, OpBuilder& builder, Location loc)
 {
-  Value value = kind == SymKind::LoopIv ? ivValues.lookup(id) : pidValues[static_cast<unsigned>(kind)];
+  Value value = kind == SymKind::LoopIv ? ivValues_.lookup(id) : pidValues_[static_cast<unsigned>(kind)];
   if (!value) return {};
   if (isa<IndexType>(value.getType())) return value;
   return arith::IndexCastOp::create(builder, loc, builder.getIndexType(), value);
@@ -611,7 +607,7 @@ FailureOr<AccessView> AccessAnalyzer::resolveIterArg(BlockArgument arg)
   bool stepDependsOnIv = dependsOnLoopIv(step->offset, ivId);
   for (const AccessDim& dim : step->dims) stepDependsOnIv |= dependsOnLoopIv(dim.start, ivId);
   if (stepDependsOnIv || !areDimsStrideless(step->dims)) {
-    deferred = DeferredReason::DataDependentOffset;
+    deferred_ = DeferredReason::DataDependentOffset;
     return failure();
   }
 
@@ -777,8 +773,8 @@ FailureOr<AccessView> AccessAnalyzer::buildScalarLeaf(Value value)
 
 FailureOr<AccessView> AccessAnalyzer::buildValue(Value value)
 {
-  if (!resolving.insert(value).second) return emitFailure(value.getLoc(), "cyclic pointer expression");
-  auto guard = llvm::scope_exit([&] { resolving.erase(value); });
+  if (!resolving_.insert(value).second) return emitFailure(value.getLoc(), "cyclic pointer expression");
+  auto guard = llvm::scope_exit([&] { resolving_.erase(value); });
 
   Operation* def = value.getDefiningOp();
   if (!def) return buildBlockArgument(cast<BlockArgument>(value));
@@ -808,7 +804,7 @@ FailureOr<AccessView> AccessAnalyzer::buildValue(Value value)
 
   if (isa<LoadOp, DescriptorLoadOp>(def)) {
     if (isPointerLike(value.getType())) return emitFailure(value.getLoc(), "pointer is loaded from memory");
-    deferred = DeferredReason::DataDependentOffset;
+    deferred_ = DeferredReason::DataDependentOffset;
     return failure();
   }
 
@@ -838,15 +834,17 @@ FailureOr<AccessMask> AccessAnalyzer::buildMaskImpl(Value value, size_t rank)
     if (failed(rhs)) return failure();
 
     AccessMask mask;
-    mask.present = true;
     mask.dimBounds.resize(rank);
     for (size_t d = 0; d < rank; ++d) {
       mask.dimBounds[d].append(lhs->dimBounds[d]);
       mask.dimBounds[d].append(rhs->dimBounds[d]);
     }
-    mask.allTrue       = lhs->allTrue && rhs->allTrue;
-    mask.allFalse      = lhs->allFalse || rhs->allFalse;
-    mask.scalarDynamic = lhs->scalarDynamic || rhs->scalarDynamic;
+    if (lhs->kind == MaskKind::ProvenFalse || rhs->kind == MaskKind::ProvenFalse)
+      mask.kind = MaskKind::ProvenFalse;
+    else if (lhs->kind == MaskKind::ProvenTrue && rhs->kind == MaskKind::ProvenTrue)
+      mask.kind = MaskKind::ProvenTrue;
+    else
+      mask.kind = MaskKind::Box;
     return mask;
   }
   if (auto cmp = dyn_cast<arith::CmpIOp>(def)) return buildCompareMask(cmp, rank);
@@ -891,8 +889,8 @@ FailureOr<AccessMask> AccessAnalyzer::buildCompareMask(arith::CmpIOp op, size_t 
   if (lhs->base || rhs->base) return emitFailure(loc, "comparison on pointers");
 
   if (predicate->isUnsigned) {
-    Interval lhsRange = rangeOfValue(lhs->offset, lhs->dims, bounds);
-    Interval rhsRange = rangeOfValue(rhs->offset, rhs->dims, bounds);
+    Interval lhsRange = rangeOfValue(lhs->offset, lhs->dims, bounds_);
+    Interval rhsRange = rangeOfValue(rhs->offset, rhs->dims, bounds_);
     if (!lhsRange.hasLo || lhsRange.lo < 0 || !rhsRange.hasLo || rhsRange.lo < 0)
       return emitFailure(loc, "unsigned comparison with possibly negative operands");
   }
@@ -906,14 +904,10 @@ FailureOr<AccessMask> AccessAnalyzer::buildCompareMask(arith::CmpIOp op, size_t 
   for (size_t d = 0; d < diff->dims.size(); ++d)
     if (diff->dims[d].stride != 0) varying.push_back(d);
 
-  AccessMask mask;
-  mask.present = true;
   if (varying.empty()) {
-    auto folded = foldConstantComparison(*diff, predicate->strict, bounds);
+    auto folded = foldConstantComparison(*diff, predicate->strict, bounds_);
     if (!folded) return emitFailure(loc, "comparison does not constrain an index");
-    mask.allTrue  = *folded;
-    mask.allFalse = !*folded;
-    return mask;
+    return AccessMask::uniform(*folded);
   }
   if (varying.size() > 1) return emitFailure(loc, "mask couples several dimensions");
 
@@ -933,9 +927,10 @@ FailureOr<AccessMask> AccessAnalyzer::buildCompareMask(arith::CmpIOp op, size_t 
     stride = -stride;
   }
 
+  AccessMask mask;
+  mask.kind = MaskKind::Box;
   mask.dimBounds.resize(rank);
   mask.dimBounds[dimIndex].push_back(LinearBound{offset, stride, predicate->strict, lower});
-  mask.allTrue = false;
   return mask;
 }
 
@@ -966,15 +961,7 @@ FailureOr<AccessMask> AccessAnalyzer::buildExpandDimsMask(ExpandDimsOp op, size_
 
 void AccessAnalyzer::classifyMask(AccessMask& mask, ArrayRef<int64_t> sizes)
 {
-  if (!mask.present) {
-    mask.allTrue  = true;
-    mask.allFalse = false;
-    return;
-  }
-  if (mask.scalarDynamic) {
-    mask.allTrue = false;
-    return;
-  }
+  if (mask.kind != MaskKind::Box) return;
 
   bool allTrue  = true;
   bool anyFalse = false;
@@ -984,20 +971,19 @@ void AccessAnalyzer::classifyMask(AccessMask& mask, ArrayRef<int64_t> sizes)
     for (const LinearBound& bound : mask.dimBounds[d]) {
       bool holds = false;
       bool fails = false;
-      evaluateBound(bound, size, bounds, holds, fails);
+      evaluateBound(bound, size, bounds_, holds, fails);
       if (!holds) allTrue = false;
       if (fails) anyFalse = true;
     }
   }
-  mask.allTrue  = allTrue;
-  mask.allFalse = anyFalse;
+  mask.kind = anyFalse ? MaskKind::ProvenFalse : allTrue ? MaskKind::ProvenTrue : MaskKind::Box;
 }
 
 FailureOr<AccessInfo> AccessAnalyzer::analyzeAccess(Value ptr, Value mask, bool isLoad, Location loc)
 {
   auto view = buildValue(ptr);
   if (failed(view)) {
-    if (deferred != DeferredReason::None) return AccessInfo::makeDeferred(deferred, isLoad);
+    if (deferred_ != DeferredReason::None) return AccessInfo::makeDeferred(deferred_, isLoad);
     return failure();
   }
   if (!view->base || !isa<BlockArgument>(view->base)) return emitFailure(loc, "base pointer is not a kernel argument");
@@ -1015,7 +1001,7 @@ FailureOr<AccessInfo> AccessAnalyzer::analyzeAccess(Value ptr, Value mask, bool 
   if (mask) {
     auto builtMask = buildMask(mask, sizes.size());
     if (failed(builtMask)) {
-      if (deferred != DeferredReason::None) return AccessInfo::makeDeferred(deferred, isLoad);
+      if (deferred_ != DeferredReason::None) return AccessInfo::makeDeferred(deferred_, isLoad);
       return failure();
     }
     info.mask = std::move(*builtMask);
@@ -1025,7 +1011,7 @@ FailureOr<AccessInfo> AccessAnalyzer::analyzeAccess(Value ptr, Value mask, bool 
         if (!bound.lower) continue;
         bool holds = false;
         bool fails = false;
-        evaluateBound(bound, dimSize, bounds, holds, fails);
+        evaluateBound(bound, dimSize, bounds_, holds, fails);
         if (!holds) return AccessInfo::makeDeferred(DeferredReason::DataDependentOffset, isLoad);
       }
       llvm::erase_if(info.mask.dimBounds[d], [](const LinearBound& bound) { return bound.lower; });
@@ -1044,7 +1030,7 @@ FailureOr<AccessInfo> AccessAnalyzer::analyzeAccess(Value ptr, Value mask, bool 
 
 FailureOr<AccessInfo> AccessAnalyzer::analyze(Operation* op)
 {
-  deferred = DeferredReason::None;
+  deferred_ = DeferredReason::None;
   if (auto info = deferredAccess(op)) return *info;
 
   if (auto load = dyn_cast<LoadOp>(op))

@@ -101,7 +101,7 @@ int64_t ceilDiv(int64_t lhs, int64_t rhs)
 
 bool isMaskWindowInjective(const AccessInfo& info)
 {
-  if (!info.mask.present || info.mask.allTrue) return false;
+  if (info.mask.kind == MaskKind::None || info.mask.kind == MaskKind::ProvenTrue) return false;
 
   AccessView window = info.view;
   for (auto [d, dim] : llvm::enumerate(window.dims)) {
@@ -120,7 +120,7 @@ bool isMaskWindowInjective(const AccessInfo& info)
 bool isLowerable(const AccessInfo& info, Type pointerType, Operation* op, triton::FuncOp func)
 {
   if (info.deferred != DeferredReason::None) return false;
-  if (info.mask.scalarDynamic || info.mask.allFalse) return false;
+  if (info.mask.kind == MaskKind::ScalarDynamic || info.mask.kind == MaskKind::ProvenFalse) return false;
   if (isa<StoreOp>(op) && !info.view.isInjective() && !isMaskWindowInjective(info)) return false;
   auto base = dyn_cast<BlockArgument>(info.view.base);
   if (!base || base.getOwner() != &func.getBody().front()) return false;
@@ -145,14 +145,14 @@ MemRefType sramBufferType(RankedTensorType tensorType, OpBuilder& builder)
 class AccessLowering
 {
 public:
-  AccessLowering(triton::FuncOp func, ModuleOp module) : func(func), analyzer(module) {}
+  AccessLowering(triton::FuncOp func, ModuleOp module) : func_(func), analyzer_(module) {}
 
   LogicalResult run()
   {
     if (!collectInfos()) return success();
-    for (const auto& [op, info] : infos)
+    for (const auto& [op, info] : infos_)
       if (failed(lowerAccess(op, info))) return failure();
-    func->setAttr(kLoweredAccessAttr, UnitAttr::get(func->getContext()));
+    func_->setAttr(kLoweredAccessAttr, UnitAttr::get(func_->getContext()));
     lowerSplats();
     return success();
   }
@@ -160,18 +160,18 @@ public:
 private:
   bool collectInfos()
   {
-    ScopedDiagnosticHandler handler(func->getContext(), [](Diagnostic&) {});
+    ScopedDiagnosticHandler handler(func_->getContext(), [](Diagnostic&) {});
 
-    size_t count = infos.size();
-    func.walk([&](Operation* op) {
+    size_t count = infos_.size();
+    func_.walk([&](Operation* op) {
       auto pointerType = getAccessPointerType(op);
       if (!pointerType) return;
 
-      FailureOr<AccessInfo> info = analyzer.analyze(op);
-      if (failed(info) || !isLowerable(*info, pointerType, op, func)) return;
-      infos.try_emplace(op, std::move(*info));
+      FailureOr<AccessInfo> info = analyzer_.analyze(op);
+      if (failed(info) || !isLowerable(*info, pointerType, op, func_)) return;
+      infos_.try_emplace(op, std::move(*info));
     });
-    return infos.size() != count;
+    return infos_.size() != count;
   }
 
   Value materializeBase(const AccessInfo& info, Type pointee, OpBuilder& builder, Location loc)
@@ -199,7 +199,7 @@ private:
       strideAttrs.push_back(builder.getIndexAttr(dim.stride));
     }
 
-    FailureOr<Value> offset = analyzer.materializeIndex(total, builder, loc);
+    FailureOr<Value> offset = analyzer_.materializeIndex(total, builder, loc);
     if (failed(offset)) return failure();
 
     auto layout   = StridedLayoutAttr::get(builder.getContext(), ShapedType::kDynamic, strides);
@@ -212,7 +212,7 @@ private:
     OpBuilder builder(load);
     Location loc            = load.getLoc();
     Value base              = materializeBase(info, load.getType(), builder, loc);
-    FailureOr<Value> offset = analyzer.materializeIndex(info.view.offset, builder, loc);
+    FailureOr<Value> offset = analyzer_.materializeIndex(info.view.offset, builder, loc);
     if (failed(offset)) return failure();
 
     Value value = memref::LoadOp::create(builder, loc, base, *offset);
@@ -226,7 +226,7 @@ private:
     OpBuilder builder(store);
     Location loc            = store.getLoc();
     Value base              = materializeBase(info, store.getValue().getType(), builder, loc);
-    FailureOr<Value> offset = analyzer.materializeIndex(info.view.offset, builder, loc);
+    FailureOr<Value> offset = analyzer_.materializeIndex(info.view.offset, builder, loc);
     if (failed(offset)) return failure();
 
     memref::StoreOp::create(builder, loc, store.getValue(), base, *offset);
@@ -241,10 +241,10 @@ private:
 
     OpBuilder builder(load);
     Location loc = load.getLoc();
-    bool masked  = info.mask.present && !info.mask.allTrue;
+    bool masked  = info.mask.kind != MaskKind::None && info.mask.kind != MaskKind::ProvenTrue;
     SmallVector<Value> dimSizes;
     if (masked) {
-      FailureOr<SmallVector<Value>> sizes = analyzer.materializeMaskSizes(info, builder, loc);
+      FailureOr<SmallVector<Value>> sizes = analyzer_.materializeMaskSizes(info, builder, loc);
       if (failed(sizes)) return failure();
       dimSizes = std::move(*sizes);
     }
@@ -278,10 +278,10 @@ private:
 
     OpBuilder builder(store);
     Location loc = store.getLoc();
-    bool masked  = info.mask.present && !info.mask.allTrue;
+    bool masked  = info.mask.kind != MaskKind::None && info.mask.kind != MaskKind::ProvenTrue;
     SmallVector<Value> dimSizes;
     if (masked) {
-      FailureOr<SmallVector<Value>> sizes = analyzer.materializeMaskSizes(info, builder, loc);
+      FailureOr<SmallVector<Value>> sizes = analyzer_.materializeMaskSizes(info, builder, loc);
       if (failed(sizes)) return failure();
       dimSizes = std::move(*sizes);
     }
@@ -306,9 +306,9 @@ private:
 
   void lowerSplats()
   {
-    llvm::DenseSet<Operation*> liveAddress = liveAddressOps(func);
+    llvm::DenseSet<Operation*> liveAddress = liveAddressOps(func_);
     SmallVector<SplatOp> splats;
-    func.walk([&](SplatOp splat) { splats.push_back(splat); });
+    func_.walk([&](SplatOp splat) { splats.push_back(splat); });
 
     for (SplatOp splat : splats) {
       if (liveAddress.contains(splat.getOperation())) continue;
@@ -321,9 +321,9 @@ private:
     }
   }
 
-  triton::FuncOp func;
-  AccessAnalyzer analyzer;
-  llvm::DenseMap<Operation*, AccessInfo> infos;
+  triton::FuncOp func_;
+  AccessAnalyzer analyzer_;
+  llvm::DenseMap<Operation*, AccessInfo> infos_;
 };
 
 struct LowerStructuredAccessPass : public ::impl::LowerStructuredAccessBase<LowerStructuredAccessPass>

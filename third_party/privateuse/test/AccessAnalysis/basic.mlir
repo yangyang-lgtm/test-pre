@@ -2,18 +2,18 @@
 
 // CHECK: [privateuse-access] op 1: tt.load rank=0 elem_bytes=4 offset=0 dims=[] mask=none deferred=none
 // CHECK-NEXT: [privateuse-access] op 2: tt.load rank=0 elem_bytes=4 offset=0 dims=[] mask=scalar deferred=none
-// CHECK-NEXT: [privateuse-access] op 3: tt.load rank=0 elem_bytes=4 offset=0 dims=[] mask=all_true deferred=none
+// CHECK-NEXT: [privateuse-access] op 3: tt.load rank=0 elem_bytes=4 offset=0 dims=[] mask=proven_true deferred=none
 // CHECK-NEXT: [privateuse-access] op 4: tt.store rank=0 elem_bytes=4 offset=0 dims=[] mask=none deferred=none
 // CHECK-NEXT: [privateuse-access] op 5: tt.store rank=0 elem_bytes=4 offset=0 dims=[] mask=scalar deferred=none
-// CHECK-NEXT: [privateuse-access] op 6: tt.load rank=1 elem_bytes=4 offset=(pid.x * 128) dims=[dim0={start:0,stride:1,size:128}] mask=all_true deferred=none
+// CHECK-NEXT: [privateuse-access] op 6: tt.load rank=1 elem_bytes=4 offset=(pid.x * 128) dims=[dim0={start:0,stride:1,size:128}] mask=proven_true deferred=none
 // CHECK-NEXT: [privateuse-access] op 7: tt.store rank=1 elem_bytes=1 offset=0 dims=[dim0={start:0,stride:1,size:128}] mask=none deferred=none
-// CHECK-NEXT: [privateuse-access] op 8: tt.load rank=1 elem_bytes=4 offset=0 dims=[dim0={start:0,stride:1,size:64}] mask=all_false deferred=none
-// CHECK-NEXT: [privateuse-access] op 9: tt.store rank=1 elem_bytes=4 offset=0 dims=[dim0={start:0,stride:1,size:64}] mask=all_true deferred=none
+// CHECK-NEXT: [privateuse-access] op 8: tt.load rank=1 elem_bytes=4 offset=0 dims=[dim0={start:0,stride:1,size:64}] mask=proven_false deferred=none
+// CHECK-NEXT: [privateuse-access] op 9: tt.store rank=1 elem_bytes=4 offset=0 dims=[dim0={start:0,stride:1,size:64}] mask=proven_true deferred=none
 // CHECK-NEXT: [privateuse-access] op 10: tt.load rank=2 elem_bytes=4 offset=0 dims=[dim0={start:0,stride:64,size:64}, dim1={start:0,stride:1,size:64}] mask=box dim1=[((0 - (pid.x + 16)) + 1*i < 0)] deferred=none
 // CHECK-NEXT: [privateuse-access] op 11: tt.load rank=3 elem_bytes=4 offset=0 dims=[dim0={start:0,stride:512,size:8}, dim1={start:0,stride:32,size:16}, dim2={start:0,stride:1,size:32}] mask=none deferred=none
 // CHECK-NEXT: [privateuse-access] op 12: tt.load rank=1 elem_bytes=4 offset=0 dims=[dim0={start:5,stride:0,size:8}] mask=none deferred=none
 // CHECK-NEXT: [privateuse-access] op 13: tt.load rank=1 elem_bytes=4 offset=0 dims=[dim0={start:0,stride:1,size:128}] mask=none deferred=none
-// CHECK-NEXT: [privateuse-access] op 14: tt.load rank=1 elem_bytes=4 offset=(pid.x * 32) dims=[dim0={start:0,stride:1,size:128}] mask=all_true deferred=none
+// CHECK-NEXT: [privateuse-access] op 14: tt.load rank=1 elem_bytes=4 offset=(pid.x * 32) dims=[dim0={start:0,stride:1,size:128}] mask=proven_true deferred=none
 // CHECK-NEXT: [privateuse-access] summary ops=14 loads=10 stores=4 atomics=0 descriptors=0 deferred=0 errors=0 reasons={}
 
 module attributes {privateuse.grid = array<i64: 4, 3, 1>} {

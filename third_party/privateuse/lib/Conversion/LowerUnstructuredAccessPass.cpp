@@ -104,19 +104,19 @@ struct PointerChain
 class UnstructuredLowering
 {
 public:
-  UnstructuredLowering(triton::FuncOp func, ModuleOp module) : func(func), analyzer(module) {}
+  UnstructuredLowering(triton::FuncOp func, ModuleOp module) : func_(func), analyzer_(module) {}
 
   LogicalResult run()
   {
     SmallVector<Operation*> accesses;
-    func.walk([&](Operation* op) {
+    func_.walk([&](Operation* op) {
       if (getAccessPointerType(op)) accesses.push_back(op);
     });
 
     bool lowered = false;
     for (Operation* op : accesses)
       if (failed(lowerAccess(op, lowered))) return failure();
-    if (lowered) func->setAttr(kLoweredAccessAttr, UnitAttr::get(func->getContext()));
+    if (lowered) func_->setAttr(kLoweredAccessAttr, UnitAttr::get(func_->getContext()));
     return success();
   }
 
@@ -124,9 +124,9 @@ private:
   bool hasEffectiveMask(Operation* op)
   {
     if (!getAccessMask(op)) return false;
-    ScopedDiagnosticHandler handler(func->getContext(), [](Diagnostic&) {});
-    FailureOr<AccessInfo> info = analyzer.analyze(op);
-    return failed(info) || !info->mask.present || !info->mask.allTrue;
+    ScopedDiagnosticHandler handler(func_->getContext(), [](Diagnostic&) {});
+    FailureOr<AccessInfo> info = analyzer_.analyze(op);
+    return failed(info) || info->mask.kind != MaskKind::ProvenTrue;
   }
 
   BlockArgument findBase(Value ptr)
@@ -158,7 +158,7 @@ private:
     if (storageElementType(pointee) != pointee) return success();
 
     BlockArgument base = findBase(ptr);
-    if (!base || base.getOwner() != &func.getBody().front()) return success();
+    if (!base || base.getOwner() != &func_.getBody().front()) return success();
     auto baseType = dyn_cast<triton::PointerType>(base.getType());
     if (!baseType || storageElementType(baseType.getPointeeType()) != storageElementType(pointee)) return success();
 
@@ -318,8 +318,8 @@ private:
     return success();
   }
 
-  triton::FuncOp func;
-  AccessAnalyzer analyzer;
+  triton::FuncOp func_;
+  AccessAnalyzer analyzer_;
 };
 
 struct LowerUnstructuredAccessPass : public ::impl::LowerUnstructuredAccessBase<LowerUnstructuredAccessPass>

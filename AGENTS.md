@@ -11,3 +11,4 @@
 
 ## C++ Guidelines
 - In C++, never put side-effecting code in `assert`. Assertions may be compiled out, so perform mutations and other required computation before the assertion and assert only the resulting condition. This guideline does not apply to Python `assert` statements.
+- Member variables of `class` use a trailing underscore (`foo_`); `struct` members keep plain names.
