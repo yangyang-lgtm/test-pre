@@ -381,6 +381,11 @@ FailureOr<ExprPtr> AccessAnalyzer::buildScalar(Value value)
     return ScalarExpr::bin(*kind, std::move(*lhs), std::move(*rhs));
   }
 
+  if (isa<LoadOp, DescriptorLoadOp>(def)) {
+    deferred = DeferredReason::DataDependentOffset;
+    return failure();
+  }
+
   return emitFailure(value.getLoc(), "unsupported scalar expression '" + Twine(def->getName().getStringRef()) + "'");
 }
 
@@ -685,7 +690,11 @@ FailureOr<AccessView> AccessAnalyzer::buildValue(Value value)
 
   if (Value src = integerCastSource(value)) return buildValue(src);
 
-  if (isa<LoadOp, DescriptorLoadOp>(def)) return emitFailure(value.getLoc(), "pointer is loaded from memory");
+  if (isa<LoadOp, DescriptorLoadOp>(def)) {
+    if (isPointerLike(value.getType())) return emitFailure(value.getLoc(), "pointer is loaded from memory");
+    deferred = DeferredReason::DataDependentOffset;
+    return failure();
+  }
 
   if (shape.empty()) return buildScalarLeaf(value);
 

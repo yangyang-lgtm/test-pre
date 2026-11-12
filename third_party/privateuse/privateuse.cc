@@ -76,6 +76,9 @@ void init_triton_privateuse(py::module_& m)
   );
 
   m.def(
-    "add_ptr_to_memref", [](PassManager& pm) { pm.addPass(triton::createPtrToMemrefPass()); }, py::arg("pm")
+    "add_lower_unstructured_access", [](PassManager& pm) { pm.addPass(triton::createLowerUnstructuredAccessPass()); },
+    py::arg("pm")
   );
+
+  m.def("add_ptr_to_memref", [](PassManager& pm) { pm.addPass(triton::createPtrToMemrefPass()); }, py::arg("pm"));
 }

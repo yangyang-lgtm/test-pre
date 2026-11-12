@@ -11,6 +11,7 @@ namespace triton {
 
 std::unique_ptr<OperationPass<ModuleOp>> createAnalyzeAccessPass();
 std::unique_ptr<OperationPass<ModuleOp>> createLowerStructuredAccessPass();
+std::unique_ptr<OperationPass<ModuleOp>> createLowerUnstructuredAccessPass();
 std::unique_ptr<OperationPass<ModuleOp>> createPtrToMemrefPass();
 
 #define GEN_PASS_REGISTRATION

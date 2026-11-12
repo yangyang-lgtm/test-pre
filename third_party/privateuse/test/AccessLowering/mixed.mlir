@@ -1,4 +1,5 @@
-// RUN: privateuse-opt %s -privateuse-lower-structured-access -privateuse-ptr-to-memref -canonicalize | FileCheck %s
+// RUN: privateuse-opt %s -privateuse-lower-structured-access -privateuse-lower-unstructured-access \
+// RUN:   -privateuse-ptr-to-memref -canonicalize | FileCheck %s --implicit-check-not=pumem.
 
 module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
   // 同一个函数里混有可分析与不可分析的访存：前者转 memref，后者保持 tt 形态。

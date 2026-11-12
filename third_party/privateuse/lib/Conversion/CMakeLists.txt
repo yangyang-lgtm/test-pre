@@ -1,6 +1,7 @@
 add_triton_library(PrivateUseConversions
   AccessReportPass.cpp
   LowerStructuredAccessPass.cpp
+  LowerUnstructuredAccessPass.cpp
   PtrToMemrefPass.cpp
 
   DEPENDS
@@ -16,5 +17,6 @@ add_triton_library(PrivateUseConversions
   MLIRTensorDialect
   MLIRTransforms
   PrivateUseAnalysis
+  PUMemIR
   TritonIR
 )

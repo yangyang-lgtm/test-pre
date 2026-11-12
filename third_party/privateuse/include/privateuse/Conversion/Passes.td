@@ -47,6 +47,29 @@ def LowerStructuredAccess : Pass<"privateuse-lower-structured-access", "mlir::Mo
   let constructor = "mlir::triton::createLowerStructuredAccessPass()";
 }
 
+def LowerUnstructuredAccess : Pass<"privateuse-lower-unstructured-access", "mlir::ModuleOp"> {
+  let summary = "Lower non-structured tt.load / tt.store to pumem gather / scatter";
+  let description = [{
+    Rewrites tensor accesses whose address chain decomposes into an entry-block
+    pointer argument plus a per-element index tensor:
+
+    * the base pointer is bridged with an unrealized_conversion_cast so that the
+      address chain stays untouched;
+    * the accumulated element offsets are materialized into an offset buffer
+      that keeps the integer element type of the offsets;
+    * loads become pumem.gather through a local tile buffer, stores become
+      pumem.scatter from a local tile buffer;
+    * functions with at least one lowered access are tagged so that
+      -privateuse-ptr-to-memref can rewrite their signatures afterwards.
+
+    Coverage is limited: masked, volatile / ignore_cta accesses, atomics,
+    descriptors, accesses whose base is not an entry block pointer argument
+    (e.g. loop-carried pointers), functions with tensor signatures, and
+    modules containing tt.call are left untouched.
+  }];
+  let constructor = "mlir::triton::createLowerUnstructuredAccessPass()";
+}
+
 def PtrToMemref : Pass<"privateuse-ptr-to-memref", "mlir::ModuleOp"> {
   let summary = "Rewrite pointer signatures and address chains of lowered functions to memrefs";
   let description = [{
