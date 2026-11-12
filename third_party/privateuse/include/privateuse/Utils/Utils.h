@@ -12,6 +12,9 @@ namespace triton {
 
 bool isPtrTypeLike(Type t);
 
+// Triton stores i1 elements in one byte, so i1 and i8 pointers alias the same storage.
+Type storageElementType(Type element);
+
 class Int128
 {
 public:

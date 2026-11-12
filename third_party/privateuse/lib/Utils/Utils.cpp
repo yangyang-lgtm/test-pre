@@ -10,6 +10,12 @@ bool isPtrTypeLike(Type t)
   }
   return isa<triton::PointerType>(t);
 }
+
+Type storageElementType(Type element)
+{
+  if (element.isInteger(1)) return IntegerType::get(element.getContext(), 8);
+  return element;
+}
 }
 
 }

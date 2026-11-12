@@ -18,9 +18,10 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
       %next = tt.addptr %ptr, %r : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
       scf.yield %next, %sum : tensor<8x!tt.ptr<f32>>, tensor<8xf32>
     }
+    %pid = tt.get_program_id x : i32
     %c4 = arith.constant 4 : i32
-    %c4S = tt.splat %c4 : i32 -> tensor<8xi32>
-    %m = arith.cmpi slt, %r, %c4S : tensor<8xi32>
+    %cond = arith.cmpi slt, %pid, %c4 : i32
+    %m = tt.splat %cond : i1 -> tensor<8xi1>
     %dS = tt.splat %dst : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
     %q = tt.addptr %dS, %r : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
     tt.store %q, %res#1, %m : tensor<8x!tt.ptr<f32>>

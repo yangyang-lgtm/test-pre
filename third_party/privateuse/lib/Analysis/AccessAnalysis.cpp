@@ -401,14 +401,14 @@ FailureOr<Value> AccessAnalyzer::materializeIndex(const ExprPtr& expr, OpBuilder
 {
   if (!expr) return arith::ConstantIndexOp::create(builder, loc, 0).getResult();
 
-  switch (expr->kind) {
-    case ScalarExpr::Kind::Const: return arith::ConstantIndexOp::create(builder, loc, expr->value).getResult();
-    case ScalarExpr::Kind::Sym: {
-      Value value = materializeSymbol(expr->symKind, expr->symId, builder, loc);
-      if (!value) return emitFailure(loc, "no value recorded for a symbolic offset term");
-      return value;
-    }
-    default: break;
+  if (expr->kind == ScalarExpr::Kind::Const) {
+    return arith::ConstantIndexOp::create(builder, loc, expr->value).getResult();
+  }
+
+  if (expr->kind == ScalarExpr::Kind::Sym) {
+    Value value = materializeSymbol(expr->symKind, expr->symId, builder, loc);
+    if (!value) return emitFailure(loc, "no value recorded for a symbolic offset term");
+    return value;
   }
 
   FailureOr<Value> lhs = materializeIndex(expr->lhs, builder, loc);

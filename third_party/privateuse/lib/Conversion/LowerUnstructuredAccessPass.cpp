@@ -1,9 +1,7 @@
 #include "privateuse/Conversion/Passes.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
 #include "privateuse/Utils/Constants.h"
-
-#define GEN_PASS_DEF_LOWERUNSTRUCTUREDACCESS
-#include "privateuse/Conversion/Passes.h.inc"
+#include "privateuse/Utils/Utils.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -15,6 +13,9 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Visitors.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+
+#define GEN_PASS_DEF_LOWERUNSTRUCTUREDACCESS
+#include "privateuse/Conversion/Passes.h.inc"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -114,6 +115,10 @@ private:
   {
     if (auto addptr = ptr.getDefiningOp<AddPtrOp>()) return findBase(addptr.getPtr());
     if (auto splat = ptr.getDefiningOp<SplatOp>()) return dyn_cast<BlockArgument>(splat.getSrc());
+    if (auto bitcast = ptr.getDefiningOp<BitcastOp>()) {
+      if (isPtrTypeLike(bitcast.getSrc().getType())) return findBase(bitcast.getSrc());
+      return {};
+    }
     if (auto broadcast = ptr.getDefiningOp<BroadcastOp>()) return findBase(broadcast.getSrc());
     if (auto expand = ptr.getDefiningOp<ExpandDimsOp>()) return findBase(expand.getSrc());
     return {};
@@ -129,20 +134,22 @@ private:
 
     auto pointerType = cast<RankedTensorType>(ptr.getType());
     auto pointee     = cast<triton::PointerType>(pointerType.getElementType()).getPointeeType();
+    // i1 access values would need type adaptation; only i1-pointer chains bitcast to i8 lower.
+    if (storageElementType(pointee) != pointee) return false;
 
     BlockArgument base = findBase(ptr);
     if (!base || base.getOwner() != &func.getBody().front()) return false;
     auto baseType = dyn_cast<triton::PointerType>(base.getType());
-    if (!baseType || baseType.getPointeeType() != pointee) return false;
+    if (!baseType || storageElementType(baseType.getPointeeType()) != storageElementType(pointee)) return false;
 
     OpBuilder builder(op);
     Location loc       = op->getLoc();
     PointerChain chain = buildChain(ptr, base, builder, loc);
 
     if (auto load = dyn_cast<LoadOp>(op))
-      lowerLoad(load, chain);
+      lowerLoad(load, chain, pointee);
     else
-      lowerStore(cast<StoreOp>(op), chain);
+      lowerStore(cast<StoreOp>(op), chain, pointee);
     return true;
   }
 
@@ -170,6 +177,7 @@ private:
       auto type        = RankedTensorType::get(shape, elementType);
       return {base, BroadcastOp::create(builder, loc, type, chain.offsets)};
     }
+    if (auto bitcast = ptr.getDefiningOp<BitcastOp>()) return buildChain(bitcast.getSrc(), base, builder, loc);
     auto expand        = cast<ExpandDimsOp>(ptr.getDefiningOp());
     PointerChain chain = buildChain(expand.getSrc(), base, builder, loc);
     if (!chain.offsets) return {base, Value{}};
@@ -180,9 +188,8 @@ private:
     return {base, ExpandDimsOp::create(builder, loc, type, chain.offsets, expand.getAxisAttr())};
   }
 
-  Value materializeBase(const PointerChain& chain, OpBuilder& builder, Location loc)
+  Value materializeBase(const PointerChain& chain, Type pointee, OpBuilder& builder, Location loc)
   {
-    auto pointee   = cast<triton::PointerType>(chain.base.getType()).getPointeeType();
     auto tokenType = MemRefType::get({ShapedType::kDynamic}, pointee);
     return UnrealizedConversionCastOp::create(builder, loc, tokenType, chain.base).getResult(0);
   }
@@ -200,12 +207,12 @@ private:
     );
   }
 
-  void lowerLoad(LoadOp load, const PointerChain& chain)
+  void lowerLoad(LoadOp load, const PointerChain& chain, Type pointee)
   {
     OpBuilder builder(load);
     Location loc    = load.getLoc();
     auto tensorType = cast<RankedTensorType>(load.getType());
-    Value base      = materializeBase(chain, builder, loc);
+    Value base      = materializeBase(chain, pointee, builder, loc);
     Value indices   = materializeIndices(chain, tensorType, builder, loc);
     Value buf       = memref::AllocOp::create(
       builder, loc, sramBufferType(tensorType, builder), builder.getI64IntegerAttr(kDefaultAlignment)
@@ -217,7 +224,7 @@ private:
     load->erase();
   }
 
-  void lowerStore(StoreOp store, const PointerChain& chain)
+  void lowerStore(StoreOp store, const PointerChain& chain, Type pointee)
   {
     OpBuilder builder(store);
     Location loc    = store.getLoc();
@@ -225,7 +232,7 @@ private:
     Value buf       = bufferization::ToBufferOp::create(
       builder, loc, sramBufferType(tensorType, builder), store.getValue(), /*read_only=*/true
     );
-    Value base    = materializeBase(chain, builder, loc);
+    Value base    = materializeBase(chain, pointee, builder, loc);
     Value indices = materializeIndices(chain, tensorType, builder, loc);
     pumem::ScatterOp::create(builder, loc, buf, indices, base);
     store->erase();
@@ -240,9 +247,15 @@ struct LowerUnstructuredAccessPass : public ::impl::LowerUnstructuredAccessBase<
 
   void getDependentDialects(DialectRegistry& registry) const override
   {
+    // chang-format off
     registry.insert<
-      arith::ArithDialect, bufferization::BufferizationDialect, memref::MemRefDialect, pumem::PUMemDialect,
-      tensor::TensorDialect>();
+      arith::ArithDialect,
+      bufferization::BufferizationDialect,
+      memref::MemRefDialect,
+      pumem::PUMemDialect,
+      tensor::TensorDialect
+    >();
+    // chang-format on
   }
 
   void runOnOperation() override

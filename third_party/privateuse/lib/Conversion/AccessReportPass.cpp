@@ -1,15 +1,15 @@
 #include "privateuse/Analysis/AccessAnalysis.h"
 #include "privateuse/Conversion/Passes.h"
 
-#define GEN_PASS_DEF_ANALYZEACCESS
-#include "privateuse/Conversion/Passes.h.inc"
-
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include <array>
+
+#define GEN_PASS_DEF_ANALYZEACCESS
+#include "privateuse/Conversion/Passes.h.inc"
 
 using namespace mlir;
 using namespace mlir::triton;

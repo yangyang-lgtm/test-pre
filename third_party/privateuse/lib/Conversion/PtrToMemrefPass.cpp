@@ -1,8 +1,6 @@
 #include "privateuse/Conversion/Passes.h"
 #include "privateuse/Utils/Constants.h"
-
-#define GEN_PASS_DEF_PTRTOMEMREF
-#include "privateuse/Conversion/Passes.h.inc"
+#include "privateuse/Utils/Utils.h"
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -17,6 +15,9 @@
 #include "mlir/IR/Visitors.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+
+#define GEN_PASS_DEF_PTRTOMEMREF
+#include "privateuse/Conversion/Passes.h.inc"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -56,12 +57,12 @@ public:
   {
     addConversion([](Type type) { return type; });
     addConversion([](triton::PointerType pointer) -> Type {
-      return MemRefType::get({ShapedType::kDynamic}, pointer.getPointeeType());
+      return MemRefType::get({ShapedType::kDynamic}, storageElementType(pointer.getPointeeType()));
     });
     addConversion([](RankedTensorType tensor) -> std::optional<Type> {
       auto pointer = dyn_cast<triton::PointerType>(tensor.getElementType());
       if (!pointer) return std::nullopt;
-      return MemRefType::get({ShapedType::kDynamic}, pointer.getPointeeType());
+      return MemRefType::get({ShapedType::kDynamic}, storageElementType(pointer.getPointeeType()));
     });
 
     auto createUnrealizedCast = [](OpBuilder& builder, Type resultType, ValueRange inputs, Location loc) -> Value {

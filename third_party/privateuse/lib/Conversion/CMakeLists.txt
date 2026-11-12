@@ -11,6 +11,7 @@ add_triton_library(PrivateUseConversions
   MLIRArithDialect
   MLIRBufferizationDialect
   MLIRIR
+  MLIRLinalgDialect
   MLIRMemRefDialect
   MLIRSCFDialect
   MLIRSCFTransforms

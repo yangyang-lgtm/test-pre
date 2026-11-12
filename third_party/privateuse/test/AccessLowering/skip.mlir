@@ -2,26 +2,23 @@
 // RUN:   --implicit-check-not=memref.
 
 module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
-  tt.func @box_mask(%p: !tt.ptr<f32>) {
-    %pid = tt.get_program_id x : i32
-    %c16 = arith.constant 16 : i32
-    %bound = arith.addi %pid, %c16 : i32
-    %c64 = arith.constant 64 : i32
-    %rows = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
-    %cols = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
-    %rowsE = tt.expand_dims %rows {axis = 1 : i32} : tensor<64xi32> -> tensor<64x1xi32>
-    %c64S1 = tt.splat %c64 : i32 -> tensor<64x1xi32>
-    %rowOff = arith.muli %rowsE, %c64S1 : tensor<64x1xi32>
-    %rowBc = tt.broadcast %rowOff : tensor<64x1xi32> -> tensor<64x64xi32>
-    %colsE = tt.expand_dims %cols {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
-    %colsBc = tt.broadcast %colsE : tensor<1x64xi32> -> tensor<64x64xi32>
-    %idx = arith.addi %rowBc, %colsBc : tensor<64x64xi32>
-    %pS = tt.splat %p : !tt.ptr<f32> -> tensor<64x64x!tt.ptr<f32>>
-    %a = tt.addptr %pS, %idx : tensor<64x64x!tt.ptr<f32>>, tensor<64x64xi32>
-    %boundS = tt.splat %bound : i32 -> tensor<64x64xi32>
-    %mask = arith.cmpi slt, %colsBc, %boundS : tensor<64x64xi32>
-    %v = tt.load %a, %mask : tensor<64x64x!tt.ptr<f32>>
-    tt.store %a, %v, %mask : tensor<64x64x!tt.ptr<f32>>
+  // mask 把行、列两个维度耦合（rows >= cols），分析层拒绝，整函数保持 tt。
+  tt.func @coupled_mask(%p: !tt.ptr<f32>) {
+    %rows = tt.make_range {start = 0 : i32, end = 8 : i32} : tensor<8xi32>
+    %cols = tt.make_range {start = 0 : i32, end = 8 : i32} : tensor<8xi32>
+    %rowsE = tt.expand_dims %rows {axis = 1 : i32} : tensor<8xi32> -> tensor<8x1xi32>
+    %c8 = arith.constant 8 : i32
+    %c8S = tt.splat %c8 : i32 -> tensor<8x1xi32>
+    %rowOff = arith.muli %rowsE, %c8S : tensor<8x1xi32>
+    %rowB = tt.broadcast %rowOff : tensor<8x1xi32> -> tensor<8x8xi32>
+    %colsE = tt.expand_dims %cols {axis = 0 : i32} : tensor<8xi32> -> tensor<1x8xi32>
+    %colB = tt.broadcast %colsE : tensor<1x8xi32> -> tensor<8x8xi32>
+    %idx = arith.addi %rowB, %colB : tensor<8x8xi32>
+    %mask = arith.cmpi sge, %rowB, %colB : tensor<8x8xi32>
+    %pS = tt.splat %p : !tt.ptr<f32> -> tensor<8x8x!tt.ptr<f32>>
+    %a = tt.addptr %pS, %idx : tensor<8x8x!tt.ptr<f32>>, tensor<8x8xi32>
+    %v = tt.load %a, %mask : tensor<8x8x!tt.ptr<f32>>
+    tt.store %a, %v, %mask : tensor<8x8x!tt.ptr<f32>>
     tt.return
   }
 
@@ -57,7 +54,7 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     tt.return
   }
 
-  // dims [2,2] 的 strides [1,1] 不是单射（i+j 重叠），store 不能降级。
+  // dims [2,2] 的 strides [1,1] 不是单射（i+j 重叠），且无 mask 可裁出单射窗口，store 不能降级。
   tt.func @overlap_store(%dst: !tt.ptr<f32>) {
     %r = tt.make_range {start = 0 : i32, end = 2 : i32} : tensor<2xi32>
     %rE = tt.expand_dims %r {axis = 1 : i32} : tensor<2xi32> -> tensor<2x1xi32>
@@ -74,7 +71,7 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
   }
 }
 
-// CHECK-LABEL: tt.func @box_mask(
+// CHECK-LABEL: tt.func @coupled_mask(
 // CHECK-SAME: %arg0: !tt.ptr<f32>
 // CHECK-DAG: tt.load
 // CHECK-DAG: tt.store

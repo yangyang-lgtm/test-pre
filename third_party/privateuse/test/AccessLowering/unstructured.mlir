@@ -1,6 +1,7 @@
 // RUN: privateuse-opt %s -privateuse-lower-structured-access -privateuse-lower-unstructured-access \
 // RUN:   -privateuse-ptr-to-memref -canonicalize | FileCheck %s \
-// RUN:   --implicit-check-not=tt.load --implicit-check-not=tt.store --implicit-check-not=tt.splat
+// RUN:   --implicit-check-not=tt.load --implicit-check-not=tt.store --implicit-check-not=tt.splat \
+// RUN:   --implicit-check-not=tt.bitcast
 
 module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
   tt.func @transform(%src: !tt.ptr<f32>, %dst: !tt.ptr<f32>, %map: !tt.ptr<i32>) {
@@ -107,5 +108,25 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     // CHECK: bufferization.to_buffer {{.*}} : tensor<4xi64> to memref<4xi64, 128>
     // CHECK: pumem.gather {{.*}} : memref<?xf32>, memref<4xi64, 128>, memref<4xf32, 128>
     // CHECK: pumem.scatter {{.*}} : memref<4xf32, 128>, memref<4xi64, 128>, memref<?xf32>
+  }
+
+  tt.func @bool_chain(%src: !tt.ptr<i1>, %dst: !tt.ptr<i1>, %map: !tt.ptr<i32>) {
+    // CHECK-LABEL: tt.func @bool_chain(
+    // CHECK-SAME: %arg0: memref<?xi8>, %arg1: memref<?xi8>, %arg2: memref<?xi32>)
+    %r = tt.make_range {start = 0 : i32, end = 4 : i32} : tensor<4xi32>
+    %mS = tt.splat %map : !tt.ptr<i32> -> tensor<4x!tt.ptr<i32>>
+    %mp = tt.addptr %mS, %r : tensor<4x!tt.ptr<i32>>, tensor<4xi32>
+    %m = tt.load %mp : tensor<4x!tt.ptr<i32>>
+    %pS = tt.splat %src : !tt.ptr<i1> -> tensor<4x!tt.ptr<i1>>
+    %p = tt.addptr %pS, %m : tensor<4x!tt.ptr<i1>>, tensor<4xi32>
+    %pb = tt.bitcast %p : tensor<4x!tt.ptr<i1>> -> tensor<4x!tt.ptr<i8>>
+    %v = tt.load %pb : tensor<4x!tt.ptr<i8>>
+    %qS = tt.splat %dst : !tt.ptr<i1> -> tensor<4x!tt.ptr<i1>>
+    %q = tt.addptr %qS, %m : tensor<4x!tt.ptr<i1>>, tensor<4xi32>
+    %qb = tt.bitcast %q : tensor<4x!tt.ptr<i1>> -> tensor<4x!tt.ptr<i8>>
+    tt.store %qb, %v : tensor<4x!tt.ptr<i8>>
+    tt.return
+    // CHECK: pumem.gather {{.*}} : memref<?xi8>, memref<4xi32, 128>, memref<4xi8, 128>
+    // CHECK: pumem.scatter {{.*}} : memref<4xi8, 128>, memref<4xi32, 128>, memref<?xi8>
   }
 }
