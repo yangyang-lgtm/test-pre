@@ -14,6 +14,8 @@
 
 namespace mlir {
 
+class OpBuilder;
+
 namespace arith {
 class CmpIOp;
 class ConstantOp;
@@ -49,6 +51,7 @@ struct AccessView
   SmallVector<AccessDim> dims;
 
   LogicalResult normalize(Type resultType, Location loc);
+  bool isInjective() const;
 };
 
 struct LinearBound
@@ -88,10 +91,12 @@ public:
   explicit AccessAnalyzer(ModuleOp module);
 
   FailureOr<AccessInfo> analyze(Operation* op);
+  FailureOr<Value> materializeIndex(const ExprPtr& expr, OpBuilder& builder, Location loc);
 
 private:
   FailureOr<AccessInfo> analyzeAccess(Value ptr, Value mask, bool isLoad, Location loc);
   FailureOr<ExprPtr> buildScalar(Value value);
+  Value materializeSymbol(SymKind kind, unsigned id, OpBuilder& builder, Location loc);
 
   FailureOr<AccessView> buildValue(Value value);
   FailureOr<AccessView> buildConstant(arith::ConstantOp op, ArrayRef<int64_t> shape);
@@ -122,7 +127,9 @@ private:
   llvm::DenseMap<Operation*, unsigned> loopIds;
   unsigned nextLoopId = 0;
   llvm::DenseSet<Value> resolving;
-  DeferredReason deferred = DeferredReason::None;
+  DeferredReason deferred        = DeferredReason::None;
+  std::array<Value, 3> pidValues = {};
+  llvm::DenseMap<unsigned, Value> ivValues;
 };
 
 llvm::StringRef toString(DeferredReason reason);

@@ -172,6 +172,8 @@ def _specialize_ir(module, grid, constants):
     passes.common.add_cse(pm)
     passes.common.add_canonicalizer(pm)
     privateuse.add_analyze_access(pm)
+    privateuse.add_lower_structured_access(pm)
+    privateuse.add_ptr_to_memref(pm)
     pm.run(module, 'specialize_kernel')
     return module
 

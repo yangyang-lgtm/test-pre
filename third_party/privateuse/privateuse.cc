@@ -4,6 +4,7 @@
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -48,7 +49,8 @@ void init_triton_privateuse(py::module_& m)
         mlir::affine::AffineDialect,
         mlir::vector::VectorDialect,
         mlir::math::MathDialect,
-        mlir::cf::ControlFlowDialect
+        mlir::cf::ControlFlowDialect,
+        mlir::bufferization::BufferizationDialect
     >();
     // clang-format on
 
@@ -67,4 +69,13 @@ void init_triton_privateuse(py::module_& m)
   );
 
   m.def("add_analyze_access", [](PassManager& pm) { pm.addPass(triton::createAnalyzeAccessPass()); }, py::arg("pm"));
+
+  m.def(
+    "add_lower_structured_access", [](PassManager& pm) { pm.addPass(triton::createLowerStructuredAccessPass()); },
+    py::arg("pm")
+  );
+
+  m.def(
+    "add_ptr_to_memref", [](PassManager& pm) { pm.addPass(triton::createPtrToMemrefPass()); }, py::arg("pm")
+  );
 }

@@ -13,7 +13,8 @@ inline constexpr int64_t kDramSpace        = 0;
 inline constexpr int64_t kTrivialSpace     = -1;
 inline constexpr int64_t kDefaultAlignment = 64;
 
-inline constexpr llvm::StringLiteral kGridAttr = "privateuse.grid";
+inline constexpr llvm::StringLiteral kGridAttr             = "privateuse.grid";
+inline constexpr llvm::StringLiteral kLoweredAccessAttr    = "privateuse.lowered_access";
 }
 }
 

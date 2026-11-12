@@ -4,10 +4,12 @@
 #include "privateuse/Utils/Utils.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/Twine.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
@@ -303,6 +305,21 @@ LogicalResult AccessView::normalize(Type resultType, Location loc)
   return success();
 }
 
+bool AccessView::isInjective() const
+{
+  SmallVector<const AccessDim*> sorted;
+  for (const AccessDim& dim : dims)
+    if (dim.size > 1) sorted.push_back(&dim);
+  llvm::sort(sorted, [](const AccessDim* lhs, const AccessDim* rhs) { return lhs->stride < rhs->stride; });
+
+  Int128 span = Int128::fromInt64(0);
+  for (const AccessDim* dim : sorted) {
+    if (Int128::fromInt64(dim->stride) <= span) return false;
+    span = span + Int128::fromInt64(dim->size - 1) * Int128::fromInt64(dim->stride);
+  }
+  return true;
+}
+
 AccessAnalyzer::AccessAnalyzer(ModuleOp module)
 {
   if (auto grid = module->getAttrOfType<DenseI64ArrayAttr>(kGridAttr)) {
@@ -337,12 +354,17 @@ FailureOr<ExprPtr> AccessAnalyzer::buildScalar(Value value)
   if (auto pid = value.getDefiningOp<GetProgramIdOp>()) {
     int axis = pid.getAxisAsInt();
     if (axis < 0 || axis >= 3) return emitFailure(value.getLoc(), "unsupported program id axis " + Twine(axis));
+    pidValues[axis] = pid.getResult();
     return ScalarExpr::sym(static_cast<SymKind>(static_cast<int>(SymKind::PidX) + axis));
   }
 
   if (auto arg = dyn_cast<BlockArgument>(value)) {
     if (auto loop = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp()))
-      if (arg == loop.getInductionVar()) return ScalarExpr::sym(SymKind::LoopIv, loopId(loop));
+      if (arg == loop.getInductionVar()) {
+        unsigned id  = loopId(loop);
+        ivValues[id] = arg;
+        return ScalarExpr::sym(SymKind::LoopIv, id);
+      }
     return emitFailure(value.getLoc(), "unsupported block argument in address expression");
   }
 
@@ -360,6 +382,55 @@ FailureOr<ExprPtr> AccessAnalyzer::buildScalar(Value value)
   }
 
   return emitFailure(value.getLoc(), "unsupported scalar expression '" + Twine(def->getName().getStringRef()) + "'");
+}
+
+Value AccessAnalyzer::materializeSymbol(SymKind kind, unsigned id, OpBuilder& builder, Location loc)
+{
+  Value value = kind == SymKind::LoopIv ? ivValues.lookup(id) : pidValues[static_cast<unsigned>(kind)];
+  if (!value) return {};
+  if (isa<IndexType>(value.getType())) return value;
+  return arith::IndexCastOp::create(builder, loc, builder.getIndexType(), value);
+}
+
+FailureOr<Value> AccessAnalyzer::materializeIndex(const ExprPtr& expr, OpBuilder& builder, Location loc)
+{
+  if (!expr) return arith::ConstantIndexOp::create(builder, loc, 0).getResult();
+
+  switch (expr->kind) {
+    case ScalarExpr::Kind::Const: return arith::ConstantIndexOp::create(builder, loc, expr->value).getResult();
+    case ScalarExpr::Kind::Sym: {
+      Value value = materializeSymbol(expr->symKind, expr->symId, builder, loc);
+      if (!value) return emitFailure(loc, "no value recorded for a symbolic offset term");
+      return value;
+    }
+    default: break;
+  }
+
+  FailureOr<Value> lhs = materializeIndex(expr->lhs, builder, loc);
+  if (failed(lhs)) return failure();
+  FailureOr<Value> rhs = materializeIndex(expr->rhs, builder, loc);
+  if (failed(rhs)) return failure();
+
+  switch (expr->kind) {
+    case ScalarExpr::Kind::Add: return arith::AddIOp::create(builder, loc, *lhs, *rhs).getResult();
+    case ScalarExpr::Kind::Sub: return arith::SubIOp::create(builder, loc, *lhs, *rhs).getResult();
+    case ScalarExpr::Kind::Mul: return arith::MulIOp::create(builder, loc, *lhs, *rhs).getResult();
+    case ScalarExpr::Kind::DivS: return arith::DivSIOp::create(builder, loc, *lhs, *rhs).getResult();
+    case ScalarExpr::Kind::DivU: return arith::DivUIOp::create(builder, loc, *lhs, *rhs).getResult();
+    case ScalarExpr::Kind::RemS: return arith::RemSIOp::create(builder, loc, *lhs, *rhs).getResult();
+    case ScalarExpr::Kind::RemU: return arith::RemUIOp::create(builder, loc, *lhs, *rhs).getResult();
+    case ScalarExpr::Kind::Shl: return arith::ShLIOp::create(builder, loc, *lhs, *rhs).getResult();
+    case ScalarExpr::Kind::ShrS: return arith::ShRSIOp::create(builder, loc, *lhs, *rhs).getResult();
+    case ScalarExpr::Kind::ShrU: return arith::ShRUIOp::create(builder, loc, *lhs, *rhs).getResult();
+    case ScalarExpr::Kind::MinS: return arith::MinSIOp::create(builder, loc, *lhs, *rhs).getResult();
+    case ScalarExpr::Kind::MaxS: return arith::MaxSIOp::create(builder, loc, *lhs, *rhs).getResult();
+    case ScalarExpr::Kind::MinU: return arith::MinUIOp::create(builder, loc, *lhs, *rhs).getResult();
+    case ScalarExpr::Kind::MaxU: return arith::MaxUIOp::create(builder, loc, *lhs, *rhs).getResult();
+    case ScalarExpr::Kind::And: return arith::AndIOp::create(builder, loc, *lhs, *rhs).getResult();
+    case ScalarExpr::Kind::Or: return arith::OrIOp::create(builder, loc, *lhs, *rhs).getResult();
+    case ScalarExpr::Kind::Xor: return arith::XOrIOp::create(builder, loc, *lhs, *rhs).getResult();
+  }
+  return emitFailure(loc, "unhandled scalar expression kind");
 }
 
 FailureOr<AccessView> AccessAnalyzer::scale(AccessView value, int64_t factor, Location loc)
@@ -452,6 +523,7 @@ FailureOr<AccessView> AccessAnalyzer::resolveIterArg(BlockArgument arg)
   if (step->base) return emitFailure(loc, "loop step carries a base pointer");
 
   unsigned ivId        = loopId(loop);
+  ivValues[ivId]       = loop.getInductionVar();
   bool stepDependsOnIv = dependsOnLoopIv(step->offset, ivId);
   for (const AccessDim& dim : step->dims) stepDependsOnIv |= dependsOnLoopIv(dim.start, ivId);
   if (stepDependsOnIv || !areDimsStrideless(step->dims)) {
