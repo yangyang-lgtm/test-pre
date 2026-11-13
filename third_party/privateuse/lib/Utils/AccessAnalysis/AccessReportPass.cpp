@@ -1,5 +1,5 @@
 #include "privateuse/Analysis/AccessAnalysis.h"
-#include "privateuse/Conversion/Passes.h"
+#include "privateuse/Utils/AccessAnalysis/Passes.h"
 
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -9,7 +9,7 @@
 #include <array>
 
 #define GEN_PASS_DEF_ANALYZEACCESS
-#include "privateuse/Conversion/Passes.h.inc"
+#include "privateuse/Utils/AccessAnalysis/Passes.h.inc"
 
 using namespace mlir;
 using namespace mlir::triton;

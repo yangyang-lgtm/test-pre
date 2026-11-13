@@ -36,10 +36,11 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
+#include "privateuse/Conversion/AccessLowering/Passes.h"
 #include "privateuse/Conversion/ArithToLinalg/Passes.h"
-#include "privateuse/Conversion/Passes.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
 #include "privateuse/Transform/SpecializeKernel/Passes.h"
+#include "privateuse/Utils/AccessAnalysis/Passes.h"
 
 #include "mlir/InitAllPasses.h"
 
@@ -63,7 +64,8 @@ inline void registerPrivateUseDialects(mlir::DialectRegistry& registry)
   mlir::tensor::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::vector::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::triton::registerTritonPasses();
-  mlir::triton::registerConversionPasses();
+  mlir::triton::registerAccessAnalysisPasses();
+  mlir::triton::registerAccessLoweringPasses();
   mlir::triton::registerArithToLinalgPasses();
   mlir::triton::registerSpecializeKernelPass();
   // clang-format off

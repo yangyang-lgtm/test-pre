@@ -1,7 +1,8 @@
+#include "privateuse/Conversion/AccessLowering/Passes.h"
 #include "privateuse/Conversion/ArithToLinalg/Passes.h"
-#include "privateuse/Conversion/Passes.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
 #include "privateuse/Transform/SpecializeKernel/SpecializeKernel.h"
+#include "privateuse/Utils/AccessAnalysis/Passes.h"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"

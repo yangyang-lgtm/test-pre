@@ -1,4 +1,4 @@
-#include "privateuse/Conversion/Passes.h"
+#include "privateuse/Conversion/AccessLowering/Passes.h"
 #include "privateuse/Utils/Utils.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -15,7 +15,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #define GEN_PASS_DEF_PTRTOMEMREF
-#include "privateuse/Conversion/Passes.h.inc"
+#include "privateuse/Conversion/AccessLowering/Passes.h.inc"
 
 using namespace mlir;
 using namespace mlir::triton;

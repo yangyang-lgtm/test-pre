@@ -7,3 +7,5 @@ add_triton_library(PrivateUseUtils
   MLIRLinalgDialect
   TritonIR
 )
+
+add_subdirectory(AccessAnalysis)

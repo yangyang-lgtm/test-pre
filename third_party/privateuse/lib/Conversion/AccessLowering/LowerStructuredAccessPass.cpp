@@ -1,5 +1,5 @@
 #include "privateuse/Analysis/AccessAnalysis.h"
-#include "privateuse/Conversion/Passes.h"
+#include "privateuse/Conversion/AccessLowering/Passes.h"
 #include "privateuse/Utils/Constants.h"
 #include "privateuse/Utils/Utils.h"
 
@@ -22,7 +22,7 @@
 #include <limits>
 
 #define GEN_PASS_DEF_LOWERSTRUCTUREDACCESS
-#include "privateuse/Conversion/Passes.h.inc"
+#include "privateuse/Conversion/AccessLowering/Passes.h.inc"
 
 using namespace mlir;
 using namespace mlir::triton;
