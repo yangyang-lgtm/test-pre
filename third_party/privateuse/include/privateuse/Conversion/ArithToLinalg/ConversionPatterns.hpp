@@ -9,6 +9,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Utils/ReshapeOpsUtils.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
@@ -192,6 +193,153 @@ struct ReshapeConverter : public OpConversionPattern<triton::ReshapeOp>
   }
 };
 
+struct ReduceConverter : public OpConversionPattern<triton::ReduceOp>
+{
+  using OpConversionPattern<triton::ReduceOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
+  {
+    auto sourceType = dyn_cast<RankedTensorType>(adaptor.getSrcs().front().getType());
+    if (!sourceType) return rewriter.notifyMatchFailure(op, "expected ranked tensor operand");
+
+    int64_t axis = op.getAxis();
+    if (axis < 0 || axis >= sourceType.getRank()) return rewriter.notifyMatchFailure(op, "reduction axis out of range");
+
+    auto loc          = op.getLoc();
+    auto rank         = sourceType.getRank();
+    bool isFullReduce = (rank == 1);
+
+    SmallVector<Value> inputs(adaptor.getSrcs().begin(), adaptor.getSrcs().end());
+
+    SmallVector<Value> initTensors;
+    initTensors.reserve(inputs.size());
+    for (auto [input, result] : llvm::zip_equal(inputs, op->getResults())) {
+      auto elemType = cast<RankedTensorType>(input.getType()).getElementType();
+      auto shape    = isFullReduce ? llvm::ArrayRef<int64_t>{} : cast<RankedTensorType>(result.getType()).getShape();
+      initTensors.push_back(tensor::EmptyOp::create(rewriter, loc, shape, elemType));
+    }
+
+    auto* context = rewriter.getContext();
+    SmallVector<AffineMap> maps;
+    for (size_t i = 0, e = inputs.size(); i < e; ++i) maps.push_back(AffineMap::getMultiDimIdentityMap(rank, context));
+
+    SmallVector<AffineExpr> keptDims;
+    for (int64_t d = 0; d < rank; ++d)
+      if (d != axis) keptDims.push_back(getAffineDimExpr(d, context));
+    auto initMap = AffineMap::get(rank, 0, keptDims, context);
+    for (size_t i = 0, e = initTensors.size(); i < e; ++i) maps.push_back(initMap);
+
+    SmallVector<utils::IteratorType> iterators(rank, utils::IteratorType::parallel);
+    iterators[axis] = utils::IteratorType::reduction;
+
+    SmallVector<Type> resultTypes = llvm::map_to_vector(initTensors, [](Value value) { return value.getType(); });
+
+    Block& combineBlock = op.getCombineOp().front();
+    auto generic        = linalg::GenericOp::create(
+      rewriter, loc, resultTypes, inputs, initTensors, maps, iterators,
+      [&](OpBuilder& nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
+        IRMapping mapping;
+        for (auto [origArg, blockArg] : llvm::zip_equal(combineBlock.getArguments(), blockArgs))
+          mapping.map(origArg, blockArg);
+        for (Operation& redOp : combineBlock.without_terminator()) nestedBuilder.clone(redOp, mapping);
+        auto results = llvm::map_to_vector(combineBlock.getTerminator()->getOperands(), [&](Value value) {
+          return mapping.lookup(value);
+        });
+        linalg::YieldOp::create(nestedBuilder, nestedLoc, results);
+      }
+    );
+
+    SmallVector<Value> finalResults;
+    finalResults.reserve(generic.getNumResults());
+    for (auto [index, result] : llvm::enumerate(generic.getResults())) {
+      if (isFullReduce) {
+        auto elemType = cast<RankedTensorType>(inputs[index].getType()).getElementType();
+        finalResults.push_back(tensor::ExtractOp::create(rewriter, loc, elemType, result, ValueRange{}));
+      } else {
+        finalResults.push_back(result);
+      }
+    }
+
+    rewriter.replaceOp(op, finalResults);
+    return success();
+  }
+};
+
+struct DotConverter : public OpConversionPattern<triton::DotOp>
+{
+  using OpConversionPattern<triton::DotOp>::OpConversionPattern;
+
+  static bool isZeroTensor(Value v, bool integers)
+  {
+    if (auto splatOp = v.getDefiningOp<triton::SplatOp>()) {
+      if (auto constOp = splatOp.getSrc().getDefiningOp<arith::ConstantOp>()) {
+        if (auto val = dyn_cast<FloatAttr>(constOp.getValue())) return val.getValueAsDouble() == 0.;
+        if (auto val = dyn_cast<IntegerAttr>(constOp.getValue())) return val.getValue().isZero();
+      }
+      return false;
+    }
+    if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
+      if (auto dense = dyn_cast<DenseElementsAttr>(constOp.getValue()); dense && dense.isSplat())
+        return integers ? dense.getSplatValue<APInt>().isZero() : dense.getSplatValue<APFloat>().isZero();
+    }
+    return false;
+  }
+
+  LogicalResult matchAndRewrite(triton::DotOp op, OpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
+  {
+    auto loc      = op.getLoc();
+    auto dstType  = cast<RankedTensorType>(op.getType());
+    auto elemType = dstType.getElementType();
+    bool integers = elemType.isInteger();
+    bool skipC    = isZeroTensor(op.getC(), integers);
+
+    auto rank = dstType.getRank();
+    if (rank > 3) return rewriter.notifyMatchFailure(op, "dot with rank > 3 is not supported");
+
+    auto init = tensor::EmptyOp::create(rewriter, loc, dstType.getShape(), elemType);
+    Value res;
+    if (rank == 3)
+      res = linalg::BatchMatmulOp::create(rewriter, loc, ValueRange{adaptor.getA(), adaptor.getB()}, ValueRange{init})
+              .getResult(0);
+    else
+      res = linalg::MatmulOp::create(rewriter, loc, ValueRange{adaptor.getA(), adaptor.getB()}, ValueRange{init})
+              .getResult(0);
+
+    if (!skipC) {
+      if (integers)
+        res = arith::AddIOp::create(rewriter, loc, adaptor.getC(), res);
+      else
+        res = arith::AddFOp::create(rewriter, loc, adaptor.getC(), res);
+    }
+
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
+struct TransposeConverter : public OpConversionPattern<triton::TransOp>
+{
+  using OpConversionPattern<triton::TransOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::TransOp op, OpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
+  {
+    auto source     = adaptor.getSrc();
+    auto sourceType = cast<RankedTensorType>(source.getType());
+    auto resultType = cast<RankedTensorType>(op.getType());
+    auto order      = op.getOrder();
+    if (order.size() != sourceType.getRank())
+      return rewriter.notifyMatchFailure(op, "transpose order size must match source rank");
+
+    SmallVector<int64_t> perm(order.begin(), order.end());
+    auto init      = tensor::EmptyOp::create(rewriter, op.getLoc(), resultType.getShape(), resultType.getElementType());
+    auto transpose = linalg::TransposeOp::create(rewriter, op.getLoc(), source, init, perm).getResults()[0];
+    rewriter.replaceOp(op, transpose);
+    return success();
+  }
+};
+
 static void populateArithToLinalgConversionPatterns(RewritePatternSet& patterns)
 {
   // clang-format off
@@ -202,7 +350,10 @@ static void populateArithToLinalgConversionPatterns(RewritePatternSet& patterns)
     MakeRangeConverter,
     BroadcastConverter,
     ExpandDimsConverter,
-    ReshapeConverter
+    ReshapeConverter,
+    ReduceConverter,
+    DotConverter,
+    TransposeConverter
   >(patterns.getContext());
   // clang-format on
 
