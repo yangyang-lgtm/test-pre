@@ -140,12 +140,6 @@ struct PtrToMemrefPass : public ::impl::PtrToMemrefBase<PtrToMemrefPass>
       return;
     }
 
-    module.walk([&](triton::FuncOp func) {
-      if (func.isExternal()) return;
-      for (auto [index, arg] : llvm::enumerate(func.getBody().front().getArguments()))
-        if (isa<MemRefType>(arg.getType())) func.setArgAttrs(index, DictionaryAttr::get(&getContext()));
-    });
-
     SmallVector<UnrealizedConversionCastOp> casts;
     module.walk([&](UnrealizedConversionCastOp cast) { casts.push_back(cast); });
     reconcileUnrealizedCasts(casts);
