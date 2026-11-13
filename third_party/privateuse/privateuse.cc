@@ -1,20 +1,28 @@
 #include "privateuse/Conversion/AccessLowering/Passes.h"
 #include "privateuse/Conversion/ArithToLinalg/Passes.h"
+#include "privateuse/Conversion/Bufferize/Passes.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
 #include "privateuse/Transform/SpecializeKernel/SpecializeKernel.h"
 #include "privateuse/Utils/AccessAnalysis/Passes.h"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
+#include "mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/ControlFlow/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/SCF/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Tensor/IR/TensorInferTypeOpInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
@@ -58,6 +66,14 @@ void init_triton_privateuse(py::module_& m)
 
     mlir::func::registerInlinerExtension(registry);
 
+    mlir::arith::registerBufferizableOpInterfaceExternalModels(registry);
+    mlir::bufferization::func_ext::registerBufferizableOpInterfaceExternalModels(registry);
+    mlir::cf::registerBufferizableOpInterfaceExternalModels(registry);
+    mlir::linalg::registerBufferizableOpInterfaceExternalModels(registry);
+    mlir::scf::registerBufferizableOpInterfaceExternalModels(registry);
+    mlir::tensor::registerBufferizableOpInterfaceExternalModels(registry);
+    mlir::tensor::registerInferTypeOpInterfaceExternalModels(registry);
+
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
   });
@@ -85,4 +101,6 @@ void init_triton_privateuse(py::module_& m)
   m.def("add_ptr_to_memref", [](PassManager& pm) { pm.addPass(triton::createPtrToMemrefPass()); }, py::arg("pm"));
 
   m.def("add_arith_to_linalg", [](PassManager& pm) { pm.addPass(triton::createArithToLinalgPass()); }, py::arg("pm"));
+
+  m.def("add_bufferize", [](PassManager& pm) { pm.addPass(triton::createBufferizePass()); }, py::arg("pm"));
 }

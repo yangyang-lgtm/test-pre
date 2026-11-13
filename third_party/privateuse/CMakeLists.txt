@@ -16,6 +16,11 @@ add_triton_plugin(TritonPrivateUse ${CMAKE_CURRENT_SOURCE_DIR}/privateuse.cc LIN
   ${extension_libs}
   MLIRSparseTensorTransforms
   MLIRControlFlowTransforms
+  MLIRArithTransforms
+  MLIRLinalgTransforms
+  MLIRTensorTransforms
+  MLIRSCFTransforms
+  MLIRBufferizationTransforms
   MLIRTensorInferTypeOpInterfaceImpl
   MLIRArithValueBoundsOpInterfaceImpl
   MLIRBufferizationDialect

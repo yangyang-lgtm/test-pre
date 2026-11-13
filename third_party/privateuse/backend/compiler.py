@@ -183,6 +183,15 @@ def _specialize_ir(module, grid, constants):
     return module
 
 
+def _fuse_and_bufferize(module):
+    pm = ir.pass_manager(module.context)
+    pm.enable_debug()
+    privateuse.add_bufferize(pm)
+    passes.common.add_canonicalizer(pm)
+    pm.run(module, 'fuse_and_bufferize')
+    return module
+
+
 def _emit_cpp(module, device_info):
     raise NotImplementedError("privateuse: no IR to C++ emission yet")
 
@@ -195,6 +204,7 @@ def lower_kernel_ir(kernel_ir, grid, device_info, kernel_name, args):
     constants = _kernel_constants(kernel_ir, kernel_name, args)
     module = _parse_ir(kernel_ir)
     module = _specialize_ir(module, grid, constants)
+    module = _fuse_and_bufferize(module)
     print(module)
     cpp = _emit_cpp(module, device_info)
     _check_entry_symbol(cpp, kernel_name)
