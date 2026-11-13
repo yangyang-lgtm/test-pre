@@ -64,7 +64,6 @@ struct ArithToLinalgPass : public ::impl::ArithToLinalgBase<ArithToLinalgPass>
   void runOnOperation() override
   {
     ModuleOp module = getOperation();
-    if (module.walk([](triton::CallOp) { return WalkResult::interrupt(); }).wasInterrupted()) return;
 
     RewritePatternSet patterns(&getContext());
     ConversionTarget target(getContext());
