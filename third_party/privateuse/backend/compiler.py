@@ -176,6 +176,8 @@ def _specialize_ir(module, grid, constants):
     privateuse.add_lower_unstructured_access(pm)
     privateuse.add_ptr_to_memref(pm)
     passes.common.add_canonicalizer(pm)
+    privateuse.add_arith_to_linalg(pm)
+    passes.common.add_canonicalizer(pm)
     passes.common.add_cse(pm)
     pm.run(module, 'specialize_kernel')
     return module

@@ -21,3 +21,5 @@ add_triton_library(PrivateUseConversions
   PUMemIR
   TritonIR
 )
+
+add_subdirectory(ArithToLinalg)

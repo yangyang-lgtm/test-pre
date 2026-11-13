@@ -1,6 +1,9 @@
-// RUN: privateuse-opt %s -privateuse-lower-structured-access -privateuse-ptr-to-memref | FileCheck %s \
+// RUN: privateuse-opt %s -privateuse-lower-structured-access | FileCheck %s \
 // RUN:   --implicit-check-not=memref.
 
+// 只跑 structured：验证软跳过的函数保持 tt 形态（不降级、无 memref）。
+// ptr-to-memref 现在转换所有函数（管线保证到达者均已降级），不再保留软跳过函数，
+// 故本测试隔离 structured 单独验证。
 module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
   // mask 把行、列两个维度耦合（rows >= cols），分析层拒绝，整函数保持 tt。
   tt.func @coupled_mask(%p: !tt.ptr<f32>) {

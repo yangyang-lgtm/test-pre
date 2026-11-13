@@ -24,34 +24,6 @@ using namespace mlir::triton;
 
 namespace {
 
-bool isConvertibleFunction(triton::FuncOp func)
-{
-  if (func.isExternal()) return false;
-  for (Type type : func.getFunctionType().getInputs())
-    if (isa<TensorType>(type)) return false;
-  for (Type type : func.getFunctionType().getResults())
-    if (isa<TensorType, triton::PointerType>(type)) return false;
-  return true;
-}
-
-RankedTensorType getAccessPointerType(Operation* op)
-{
-  Value ptr;
-  if (auto load = dyn_cast<LoadOp>(op)) {
-    if (load.getIsVolatile()) return {};
-    ptr = load.getPtr();
-  } else if (auto store = dyn_cast<StoreOp>(op)) {
-    if (store.getIgnoreCta()) return {};
-    ptr = store.getPtr();
-  } else {
-    return {};
-  }
-  auto type = dyn_cast<RankedTensorType>(ptr.getType());
-  if (!type || type.getRank() == 0) return {};
-  if (!isa<triton::PointerType>(type.getElementType())) return {};
-  return type;
-}
-
 Value getAccessMask(Operation* op)
 {
   if (auto load = dyn_cast<LoadOp>(op)) return load.getMask();
@@ -85,7 +57,6 @@ Value castOffset(Value value, Type target, OpBuilder& builder, Location loc)
   auto type = cast<RankedTensorType>(value.getType());
   if (type.getElementType() == target) return value;
   auto resultType = RankedTensorType::get(type.getShape(), target);
-  // Triton offsets are signed; widening must sign-extend (extui corrupts negative offsets).
   return arith::ExtSIOp::create(builder, loc, resultType, value);
 }
 
@@ -109,18 +80,32 @@ public:
   LogicalResult run()
   {
     SmallVector<Operation*> accesses;
-    func_.walk([&](Operation* op) {
-      if (getAccessPointerType(op)) accesses.push_back(op);
-    });
-
-    bool lowered = false;
+    if (failed(collectAccesses(accesses))) return failure();
     for (Operation* op : accesses)
-      if (failed(lowerAccess(op, lowered))) return failure();
-    if (lowered) func_->setAttr(kLoweredAccessAttr, UnitAttr::get(func_->getContext()));
+      if (failed(lowerAccess(op))) return failure();
     return success();
   }
 
 private:
+  LogicalResult collectAccesses(SmallVectorImpl<Operation*>& accesses)
+  {
+    bool unsupported = false;
+    func_.walk([&](Operation* op) {
+      if (isa<LoadOp, StoreOp>(op)) {
+        accesses.push_back(op);
+        return;
+      }
+      if (isa<
+            DescriptorLoadOp, DescriptorStoreOp, DescriptorReduceOp, DescriptorGatherOp, DescriptorScatterOp,
+            AtomicRMWOp, AtomicCASOp, AtomicPollOp>(op)) {
+        op->emitError("privateuse-lower-unstructured-access: unsupported access op '")
+          << op->getName() << "' (only tt.load/tt.store are allowed)";
+        unsupported = true;
+      }
+    });
+    return failure(unsupported);
+  }
+
   bool hasEffectiveMask(Operation* op)
   {
     if (!getAccessMask(op)) return false;
@@ -132,46 +117,70 @@ private:
   BlockArgument findBase(Value ptr)
   {
     if (auto arg = dyn_cast<BlockArgument>(ptr)) return isa<triton::PointerType>(arg.getType()) ? arg : BlockArgument();
-
-    if (auto bitcast = ptr.getDefiningOp<BitcastOp>()) {
-      if (isPtrTypeLike(bitcast.getSrc().getType())) return findBase(bitcast.getSrc());
-      return {};
-    }
     if (auto addptr = ptr.getDefiningOp<AddPtrOp>()) return findBase(addptr.getPtr());
     if (auto splat = ptr.getDefiningOp<SplatOp>()) return findBase(splat.getSrc());
     if (auto broadcast = ptr.getDefiningOp<BroadcastOp>()) return findBase(broadcast.getSrc());
     if (auto expand = ptr.getDefiningOp<ExpandDimsOp>()) return findBase(expand.getSrc());
+    if (auto bitcast = ptr.getDefiningOp<BitcastOp>()) {
+      if (isPtrTypeLike(bitcast.getSrc().getType())) return findBase(bitcast.getSrc());
+      return {};
+    }
     return {};
   }
 
-  LogicalResult lowerAccess(Operation* op, bool& lowered)
+  LogicalResult lowerAccess(Operation* op)
   {
-    bool masked = hasEffectiveMask(op);
     Value ptr;
-    if (auto load = dyn_cast<LoadOp>(op))
+    if (auto load = dyn_cast<LoadOp>(op)) {
+      if (load.getIsVolatile()) {
+        op->emitError("privateuse-lower-unstructured-access: volatile load cannot be lowered to gather/scatter");
+        return failure();
+      }
       ptr = load.getPtr();
-    else
-      ptr = cast<StoreOp>(op).getPtr();
+    } else {
+      auto store = cast<StoreOp>(op);
+      if (store.getIgnoreCta()) {
+        op->emitError("privateuse-lower-unstructured-access: ignore_cta store cannot be lowered to gather/scatter");
+        return failure();
+      }
+      ptr = store.getPtr();
+    }
 
-    auto pointerType = cast<RankedTensorType>(ptr.getType());
-    auto pointee     = cast<triton::PointerType>(pointerType.getElementType()).getPointeeType();
-    if (storageElementType(pointee) != pointee) return success();
+    auto pointerType = dyn_cast<RankedTensorType>(ptr.getType());
+    if (!pointerType || pointerType.getRank() == 0 || !isa<triton::PointerType>(pointerType.getElementType())) {
+      op->emitError("privateuse-lower-unstructured-access: access is not a ranked pointer tensor (scalar or rank-0)");
+      return failure();
+    }
+    auto pointee = cast<triton::PointerType>(pointerType.getElementType()).getPointeeType();
+    if (storageElementType(pointee) != pointee) {
+      op->emitError("privateuse-lower-unstructured-access: direct i1 access requires i8 storage packing");
+      return failure();
+    }
 
     BlockArgument base = findBase(ptr);
-    if (!base || base.getOwner() != &func_.getBody().front()) return success();
+    if (!base || base.getOwner() != &func_.getBody().front()) {
+      op->emitError("privateuse-lower-unstructured-access: pointer base is not a kernel entry-block argument");
+      return failure();
+    }
     auto baseType = dyn_cast<triton::PointerType>(base.getType());
-    if (!baseType || storageElementType(baseType.getPointeeType()) != storageElementType(pointee)) return success();
+    if (!baseType || storageElementType(baseType.getPointeeType()) != storageElementType(pointee)) {
+      op->emitError("privateuse-lower-unstructured-access: base and access storage element types differ");
+      return failure();
+    }
 
     OpBuilder builder(op);
     FailureOr<PointerChain> chain = buildChain(ptr, base, builder, op->getLoc());
-    if (failed(chain)) return success();
+    if (failed(chain)) {
+      op->emitError("privateuse-lower-unstructured-access: unsupported pointer chain (cannot rebuild offsets)");
+      return failure();
+    }
 
+    bool masked = hasEffectiveMask(op);
     if (auto load = dyn_cast<LoadOp>(op)) {
       if (failed(lowerLoad(load, *chain, masked, pointee))) return failure();
     } else {
       if (failed(lowerStore(cast<StoreOp>(op), *chain, masked, pointee))) return failure();
     }
-    lowered = true;
     return success();
   }
 
@@ -196,6 +205,7 @@ private:
 
   FailureOr<PointerChain> buildChain(Value ptr, BlockArgument base, OpBuilder& builder, Location loc)
   {
+    if (ptr == base) return PointerChain{base, Value{}};
     if (auto addptr = ptr.getDefiningOp<AddPtrOp>()) {
       FailureOr<PointerChain> chain = buildChain(addptr.getPtr(), base, builder, loc);
       if (failed(chain)) return failure();
@@ -209,13 +219,12 @@ private:
       Value rhs       = castOffset(offsets, type, builder, loc);
       return PointerChain{base, arith::AddIOp::create(builder, loc, lhs, rhs)};
     }
-    if (ptr == base) return PointerChain{base, Value{}};
     if (auto splat = ptr.getDefiningOp<SplatOp>()) {
       FailureOr<Value> offsets = buildScalarOffsets(splat.getSrc(), base, builder, loc);
       if (failed(offsets)) return failure();
       if (!*offsets) return PointerChain{base, Value{}};
       auto type = RankedTensorType::get(cast<RankedTensorType>(splat.getType()).getShape(), (*offsets).getType());
-      return PointerChain{base, tensor::SplatOp::create(builder, loc, *offsets, type)};
+      return PointerChain{base, SplatOp::create(builder, loc, type, *offsets)};
     }
     if (auto broadcast = ptr.getDefiningOp<BroadcastOp>()) {
       FailureOr<PointerChain> chain = buildChain(broadcast.getSrc(), base, builder, loc);
@@ -256,7 +265,7 @@ private:
     if (!offsets) {
       auto type  = RankedTensorType::get(accessType.getShape(), builder.getI32Type());
       Value zero = arith::ConstantOp::create(builder, loc, builder.getI32IntegerAttr(0));
-      offsets    = tensor::SplatOp::create(builder, loc, zero, type);
+      offsets    = SplatOp::create(builder, loc, type, zero);
     }
     return bufferization::ToBufferOp::create(
       builder, loc, tensorBufferType(offsets, builder), offsets, /*read_only=*/true
@@ -267,7 +276,7 @@ private:
   {
     if (!isa<RankedTensorType>(mask.getType())) {
       auto type = RankedTensorType::get(accessType.getShape(), builder.getI1Type());
-      mask      = tensor::SplatOp::create(builder, loc, mask, type);
+      mask      = SplatOp::create(builder, loc, type, mask);
     }
     return bufferization::ToBufferOp::create(builder, loc, tensorBufferType(mask, builder), mask, /*read_only=*/true);
   }
@@ -342,16 +351,19 @@ struct LowerUnstructuredAccessPass : public ::impl::LowerUnstructuredAccessBase<
   void runOnOperation() override
   {
     ModuleOp module = getOperation();
-    if (module.walk([](triton::CallOp) { return WalkResult::interrupt(); }).wasInterrupted()) return;
+    if (module.walk([](triton::CallOp) { return WalkResult::interrupt(); }).wasInterrupted()) {
+      module.emitError("privateuse-lower-unstructured-access: cannot lower a module containing tt.call");
+      signalPassFailure();
+      return;
+    }
 
     SmallVector<triton::FuncOp> functions;
     module.walk([&](triton::FuncOp func) { functions.push_back(func); });
 
     for (triton::FuncOp func : functions) {
-      if (!isConvertibleFunction(func)) continue;
+      if (func.isExternal()) continue;
       if (failed(UnstructuredLowering(func, module).run())) {
         signalPassFailure();
-        return;
       }
     }
   }

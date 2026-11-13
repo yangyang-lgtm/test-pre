@@ -1,5 +1,5 @@
-// RUN: privateuse-opt %s -privateuse-lower-structured-access -privateuse-ptr-to-memref -canonicalize \
-// RUN:   -convert-elementwise-to-linalg -one-shot-bufferize="allow-unknown-ops=1" \
+// RUN: privateuse-opt %s -privateuse-lower-structured-access -privateuse-ptr-to-memref \
+// RUN:   -privateuse-arith-to-linalg -canonicalize -one-shot-bufferize="allow-unknown-ops=1" \
 // RUN:   -canonicalize | FileCheck %s \
 // RUN:   --implicit-check-not=tt.load --implicit-check-not=tt.store \
 // RUN:   --implicit-check-not=tt.splat --implicit-check-not=tensor \
@@ -258,7 +258,7 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
 // CHECK-LABEL: tt.func @loop_acc(
 // CHECK-SAME: %arg0: memref<?xf32>, %arg1: memref<?xf32>, %arg2: i32
 // CHECK: %[[ACC:.*]] = memref.alloc{{.*}}: memref<128xf32>
-// CHECK: memref.copy {{.*}}, %[[ACC]] : memref<128xf32> to memref<128xf32>
+// CHECK: linalg.fill ins(%{{.*}} : f32) outs(%[[ACC]] : memref<128xf32>)
 // CHECK: scf.for
 // CHECK: %[[TILE:.*]] = memref.alloc() {{.*}} : memref<128xf32, 128>
 // CHECK: memref.copy {{.*}}, %[[TILE]] : memref<128xf32, strided<[1], offset: ?>> to memref<128xf32, 128>

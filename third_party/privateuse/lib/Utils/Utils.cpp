@@ -29,7 +29,6 @@ Value maskedFillValue(LoadOp load, Type elementType, OpBuilder& builder, Locatio
   Value other = load.getOther();
   if (!other) return arith::ConstantOp::create(builder, loc, elementType, builder.getZeroAttr(elementType));
   if (auto splat = other.getDefiningOp<SplatOp>()) return splat.getSrc();
-  if (auto splat = other.getDefiningOp<tensor::SplatOp>()) return splat.getInput();
   if (auto cst = other.getDefiningOp<arith::ConstantOp>())
     if (auto dense = dyn_cast<DenseElementsAttr>(cst.getValue()); dense && dense.isSplat())
       return arith::ConstantOp::create(builder, loc, elementType, dense.getSplatValue<TypedAttr>());

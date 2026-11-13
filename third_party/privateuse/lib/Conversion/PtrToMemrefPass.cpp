@@ -1,8 +1,6 @@
 #include "privateuse/Conversion/Passes.h"
-#include "privateuse/Utils/Constants.h"
 #include "privateuse/Utils/Utils.h"
 
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"
@@ -29,25 +27,6 @@ bool isPointerLike(Type type)
   if (isa<triton::PointerType>(type)) return true;
   auto tensor = dyn_cast<RankedTensorType>(type);
   return tensor && isa<triton::PointerType>(tensor.getElementType());
-}
-
-bool isPointerChainOp(Operation* op)
-{
-  return isa<SplatOp, AddPtrOp, BroadcastOp, ExpandDimsOp>(op);
-}
-
-bool hasRemainingPointerUses(triton::FuncOp func)
-{
-  WalkResult result = func.walk([](Operation* op) {
-    if (isPointerChainOp(op)) return WalkResult::advance();
-    if (isa<
-          scf::ForOp, scf::IfOp, scf::IndexSwitchOp, scf::WhileOp, scf::YieldOp, scf::ConditionOp,
-          UnrealizedConversionCastOp>(op))
-      return WalkResult::advance();
-    if (llvm::any_of(op->getOperandTypes(), isPointerLike)) return WalkResult::interrupt();
-    return WalkResult::advance();
-  });
-  return result.wasInterrupted();
 }
 
 class PtrTokenConverter : public TypeConverter
@@ -135,15 +114,6 @@ struct PtrToMemrefPass : public ::impl::PtrToMemrefBase<PtrToMemrefPass>
   {
     ModuleOp module = getOperation();
 
-    llvm::DenseSet<Operation*> marked;
-    llvm::DenseSet<Operation*> keepChains;
-    module.walk([&](triton::FuncOp func) {
-      if (!func->hasAttr(kLoweredAccessAttr)) return;
-      marked.insert(func.getOperation());
-      if (hasRemainingPointerUses(func)) keepChains.insert(func.getOperation());
-    });
-    if (marked.empty()) return;
-
     PtrTokenConverter converter;
     RewritePatternSet patterns(&getContext());
     populateFunctionOpInterfaceTypeConversionPattern<triton::FuncOp>(patterns, converter);
@@ -154,25 +124,15 @@ struct PtrToMemrefPass : public ::impl::PtrToMemrefBase<PtrToMemrefPass>
     ConversionTarget target(getContext());
     target.addLegalDialect<arith::ArithDialect, memref::MemRefDialect, scf::SCFDialect, tensor::TensorDialect>();
     scf::populateSCFStructuralTypeConversionsAndLegality(converter, patterns, target);
-    target
-      .addDynamicallyLegalOp<scf::ForOp, scf::IfOp, scf::YieldOp, scf::WhileOp, scf::ConditionOp, scf::IndexSwitchOp>(
-        [&](Operation* op) -> std::optional<bool> {
-          auto func = op->getParentOfType<triton::FuncOp>();
-          if (!func || !marked.contains(func.getOperation())) return true;
-          if (keepChains.contains(func.getOperation())) return true;
-          return std::nullopt;
-        }
-      );
+    target.addDynamicallyLegalOp<scf::ForOp, scf::IfOp, scf::YieldOp>([&](Operation* op) -> std::optional<bool> {
+      if (!op->getParentOfType<triton::FuncOp>()) return true;
+      return std::nullopt;
+    });
     target.addDynamicallyLegalOp<triton::FuncOp>([&](triton::FuncOp op) {
-      return !marked.contains(op.getOperation()) ||
-             converter.isSignatureLegal(cast<FunctionType>(op.getFunctionType()));
+      return converter.isSignatureLegal(cast<FunctionType>(op.getFunctionType()));
     });
     target.addDynamicallyLegalOp<SplatOp, AddPtrOp, BroadcastOp, ExpandDimsOp>([&](Operation* op) {
-      auto func = op->getParentOfType<triton::FuncOp>();
-      if (!func || !marked.contains(func.getOperation())) return true;
-      if (!llvm::any_of(op->getOperandTypes(), isPointerLike) && !llvm::any_of(op->getResultTypes(), isPointerLike))
-        return true;
-      return keepChains.contains(func.getOperation());
+      return !llvm::any_of(op->getOperandTypes(), isPointerLike) && !llvm::any_of(op->getResultTypes(), isPointerLike);
     });
 
     if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
@@ -180,12 +140,11 @@ struct PtrToMemrefPass : public ::impl::PtrToMemrefBase<PtrToMemrefPass>
       return;
     }
 
-    for (Operation* op : marked) {
-      auto func = cast<triton::FuncOp>(op);
-      func->removeAttr(kLoweredAccessAttr);
+    module.walk([&](triton::FuncOp func) {
+      if (func.isExternal()) return;
       for (auto [index, arg] : llvm::enumerate(func.getBody().front().getArguments()))
         if (isa<MemRefType>(arg.getType())) func.setArgAttrs(index, DictionaryAttr::get(&getContext()));
-    }
+    });
 
     SmallVector<UnrealizedConversionCastOp> casts;
     module.walk([&](UnrealizedConversionCastOp cast) { casts.push_back(cast); });

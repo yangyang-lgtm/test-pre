@@ -1,3 +1,4 @@
+#include "privateuse/Conversion/ArithToLinalg/Passes.h"
 #include "privateuse/Conversion/Passes.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
 #include "privateuse/Transform/SpecializeKernel/SpecializeKernel.h"
@@ -81,4 +82,6 @@ void init_triton_privateuse(py::module_& m)
   );
 
   m.def("add_ptr_to_memref", [](PassManager& pm) { pm.addPass(triton::createPtrToMemrefPass()); }, py::arg("pm"));
+
+  m.def("add_arith_to_linalg", [](PassManager& pm) { pm.addPass(triton::createArithToLinalgPass()); }, py::arg("pm"));
 }

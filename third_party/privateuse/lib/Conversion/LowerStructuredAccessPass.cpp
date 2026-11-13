@@ -4,7 +4,6 @@
 #include "privateuse/Utils/Utils.h"
 
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -29,40 +28,6 @@ using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
-
-llvm::DenseSet<Operation*> liveAddressOps(triton::FuncOp func)
-{
-  SmallVector<Value> worklist;
-  func.walk([&](Operation* op) {
-    if (auto load = dyn_cast<LoadOp>(op)) {
-      worklist.push_back(load.getPtr());
-      if (Value mask = load.getMask()) worklist.push_back(mask);
-      return;
-    }
-    if (auto store = dyn_cast<StoreOp>(op)) {
-      worklist.push_back(store.getPtr());
-      if (Value mask = store.getMask()) worklist.push_back(mask);
-    }
-  });
-
-  llvm::DenseSet<Operation*> ops;
-  while (!worklist.empty()) {
-    Operation* def = worklist.pop_back_val().getDefiningOp();
-    if (!def || !func->isProperAncestor(def) || !ops.insert(def).second) continue;
-    for (Value operand : def->getOperands()) worklist.push_back(operand);
-  }
-  return ops;
-}
-
-bool isConvertibleFunction(triton::FuncOp func)
-{
-  if (func.isExternal()) return false;
-  for (Type type : func.getFunctionType().getInputs())
-    if (isa<TensorType>(type)) return false;
-  for (Type type : func.getFunctionType().getResults())
-    if (isa<TensorType, triton::PointerType>(type)) return false;
-  return true;
-}
 
 Type getAccessPointerType(Operation* op)
 {
@@ -152,8 +117,6 @@ public:
     if (!collectInfos()) return success();
     for (const auto& [op, info] : infos_)
       if (failed(lowerAccess(op, info))) return failure();
-    func_->setAttr(kLoweredAccessAttr, UnitAttr::get(func_->getContext()));
-    lowerSplats();
     return success();
   }
 
@@ -304,23 +267,6 @@ private:
     return lowerStore(cast<StoreOp>(op), info);
   }
 
-  void lowerSplats()
-  {
-    llvm::DenseSet<Operation*> liveAddress = liveAddressOps(func_);
-    SmallVector<SplatOp> splats;
-    func_.walk([&](SplatOp splat) { splats.push_back(splat); });
-
-    for (SplatOp splat : splats) {
-      if (liveAddress.contains(splat.getOperation())) continue;
-      auto tensorType = cast<RankedTensorType>(splat.getType());
-      if (isa<triton::PointerType>(tensorType.getElementType())) continue;
-      OpBuilder builder(splat);
-      auto result = tensor::SplatOp::create(builder, splat.getLoc(), splat.getSrc(), tensorType);
-      splat.replaceAllUsesWith(result.getResult());
-      splat->erase();
-    }
-  }
-
   triton::FuncOp func_;
   AccessAnalyzer analyzer_;
   llvm::DenseMap<Operation*, AccessInfo> infos_;
@@ -352,7 +298,7 @@ struct LowerStructuredAccessPass : public ::impl::LowerStructuredAccessBase<Lowe
     module.walk([&](triton::FuncOp func) { functions.push_back(func); });
 
     for (triton::FuncOp func : functions) {
-      if (!isConvertibleFunction(func)) continue;
+      if (func.isExternal()) continue;
       if (failed(AccessLowering(func, module).run())) {
         signalPassFailure();
         return;

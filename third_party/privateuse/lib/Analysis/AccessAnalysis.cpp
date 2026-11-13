@@ -234,7 +234,7 @@ FailureOr<AccessMask> makeScalarMask(Value value)
 
 std::optional<AccessInfo> deferredAccess(Operation* op)
 {
-  if (isa<AtomicRMWOp>(op)) return AccessInfo::makeDeferred(DeferredReason::Atomic);
+  if (isa<AtomicRMWOp, AtomicCASOp, AtomicPollOp>(op)) return AccessInfo::makeDeferred(DeferredReason::Atomic);
 
   if (isa<DescriptorLoadOp, DescriptorStoreOp, DescriptorReduceOp, DescriptorGatherOp, DescriptorScatterOp>(op))
     return AccessInfo::makeDeferred(

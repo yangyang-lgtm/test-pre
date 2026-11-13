@@ -1,7 +1,7 @@
 // RUN: privateuse-opt %s -privateuse-lower-structured-access -privateuse-lower-unstructured-access \
-// RUN:   -privateuse-ptr-to-memref -canonicalize | FileCheck %s \
+// RUN:   -privateuse-ptr-to-memref -privateuse-arith-to-linalg -canonicalize | FileCheck %s \
 // RUN:   --implicit-check-not=tt.load --implicit-check-not=tt.store --implicit-check-not=tt.splat \
-// RUN:   --implicit-check-not=tt.bitcast --implicit-check-not=linalg.
+// RUN:   --implicit-check-not=tt.bitcast
 
 module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
   tt.func @transform(%src: !tt.ptr<f32>, %dst: !tt.ptr<f32>, %map: !tt.ptr<i32>) {
@@ -104,7 +104,7 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     %v = tt.load %q : tensor<4x!tt.ptr<f32>>
     tt.store %q, %v : tensor<4x!tt.ptr<f32>>
     tt.return
-    // CHECK: arith.extsi {{.*}} : tensor<4xi32> to tensor<4xi64>
+    // CHECK: linalg.generic {{.*}} ins(%{{.*}} : tensor<4xi32>) outs(%{{.*}} : tensor<4xi64>)
     // CHECK: bufferization.to_buffer {{.*}} : tensor<4xi64> to memref<4xi64, 128>
     // CHECK: pumem.gather {{.*}} : memref<?xf32>, memref<4xi64, 128>, memref<4xf32, 128>
     // CHECK: pumem.scatter {{.*}} : memref<4xf32, 128>, memref<4xi64, 128>, memref<?xf32>
@@ -185,7 +185,7 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     %v = tt.load %p : tensor<4x!tt.ptr<f32>>
     tt.store %p, %v : tensor<4x!tt.ptr<f32>>
     tt.return
-    // CHECK: tensor.splat %{{.*}} : tensor<4xi32>
+    // CHECK: linalg.fill ins(%{{.*}} : i32) outs(%{{.*}} : tensor<4xi32>)
     // CHECK: pumem.gather {{.*}} : memref<?xf32>, memref<4xi32, 128>, memref<4xf32, 128>
     // CHECK: pumem.scatter {{.*}} : memref<4xf32, 128>, memref<4xi32, 128>, memref<?xf32>
   }

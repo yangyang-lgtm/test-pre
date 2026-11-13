@@ -1,6 +1,10 @@
-// RUN: privateuse-opt %s -privateuse-lower-structured-access -privateuse-ptr-to-memref | FileCheck %s \
+// RUN: privateuse-opt %s -privateuse-lower-structured-access | FileCheck %s \
 // RUN:   --implicit-check-not=memref.
+// RUN: privateuse-opt %s -privateuse-lower-structured-access -privateuse-lower-unstructured-access -verify-diagnostics
 
+// RUN1 只跑 structured：含 tt.call 的模块被 structured 整体跳过，保持 tt 形态。
+// RUN2 验证 unstructured 对 tt.call 模块硬报错。
+// expected-error @+1 {{cannot lower a module containing tt.call}}
 module attributes {privateuse.grid = array<i64: 4, 1, 1>} {
   tt.func private @add_one(%p: !tt.ptr<f32>) {
     %r = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32>
