@@ -241,8 +241,6 @@ std::optional<AccessInfo> deferredAccess(Operation* op)
       DeferredReason::UnsupportedDescriptor, isa<DescriptorLoadOp, DescriptorGatherOp>(op)
     );
 
-  if (isa<GatherOp>(op)) return AccessInfo::makeDeferred(DeferredReason::DataDependentOffset, /*isLoad=*/true);
-
   return std::nullopt;
 }
 

@@ -1,5 +1,5 @@
 // RUN: privateuse-opt %s -privateuse-lower-structured-access -privateuse-lower-unstructured-access \
-// RUN:   -privateuse-ptr-to-memref -privateuse-arith-to-linalg -canonicalize | FileCheck %s \
+// RUN:   -privateuse-ptr-to-memref -canonicalize -privateuse-arith-to-linalg -canonicalize | FileCheck %s \
 // RUN:   --implicit-check-not=tt.load --implicit-check-not=tt.store --implicit-check-not=tt.splat \
 // RUN:   --implicit-check-not=tt.bitcast
 

@@ -79,8 +79,6 @@ MemoryOpInfo classifyOp(Operation* op)
              )) {
     info.matches      = true;
     info.isDescriptor = true;
-  } else if (isa<GatherOp>(op)) {
-    info.matches = true;
   }
   return info;
 }

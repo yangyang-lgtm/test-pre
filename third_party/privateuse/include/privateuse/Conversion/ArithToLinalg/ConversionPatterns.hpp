@@ -15,13 +15,6 @@
 namespace mlir {
 namespace triton {
 
-static inline bool isPointerLike(Type type)
-{
-  if (isa<triton::PointerType>(type)) return true;
-  auto tensor = dyn_cast<RankedTensorType>(type);
-  return tensor && isa<triton::PointerType>(tensor.getElementType());
-}
-
 struct SplatConverter : public OpConversionPattern<triton::SplatOp>
 {
   using OpConversionPattern<triton::SplatOp>::OpConversionPattern;
@@ -30,9 +23,8 @@ struct SplatConverter : public OpConversionPattern<triton::SplatOp>
   matchAndRewrite(triton::SplatOp op, OpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
     auto opType = cast<RankedTensorType>(op.getType());
-    if (isPointerLike(opType)) return rewriter.notifyMatchFailure(op, "pointer splat is preserved");
-    auto loc  = op.getLoc();
-    auto init = tensor::EmptyOp::create(rewriter, loc, opType.getShape(), opType.getElementType());
+    auto loc    = op.getLoc();
+    auto init   = tensor::EmptyOp::create(rewriter, loc, opType.getShape(), opType.getElementType());
     rewriter.replaceOpWithNewOp<linalg::FillOp>(op, ValueRange{adaptor.getSrc()}, ValueRange{init});
     return success();
   }
@@ -64,7 +56,6 @@ struct BitcastConverter : public OpConversionPattern<triton::BitcastOp>
   LogicalResult
   matchAndRewrite(triton::BitcastOp op, OpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
-    if (isPointerLike(op.getType())) return rewriter.notifyMatchFailure(op, "pointer bitcast is preserved");
     auto result = arith::BitcastOp::create(rewriter, op.getLoc(), op.getType(), adaptor.getSrc());
     rewriter.replaceOp(op, result.getResult());
     return success();
@@ -117,10 +108,9 @@ struct BroadcastConverter : public OpConversionPattern<triton::BroadcastOp>
   LogicalResult
   matchAndRewrite(triton::BroadcastOp op, OpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
-    auto loc        = op.getLoc();
-    auto sourceType = cast<RankedTensorType>(adaptor.getSrc().getType());
-    auto resultType = cast<RankedTensorType>(op.getType());
-    if (isPointerLike(resultType)) return rewriter.notifyMatchFailure(op, "pointer broadcast is preserved");
+    auto loc          = op.getLoc();
+    auto sourceType   = cast<RankedTensorType>(adaptor.getSrc().getType());
+    auto resultType   = cast<RankedTensorType>(op.getType());
     auto elementType  = resultType.getElementType();
     size_t resultRank = resultType.getRank();
 
@@ -151,7 +141,6 @@ struct ExpandDimsConverter : public OpConversionPattern<triton::ExpandDimsOp>
   {
     auto src     = adaptor.getSrc();
     auto srcType = cast<RankedTensorType>(src.getType());
-    if (isPointerLike(srcType)) return rewriter.notifyMatchFailure(op, "pointer expand_dims is preserved");
     auto srcRank = srcType.getRank();
     auto resType = cast<RankedTensorType>(op->getResultTypes()[0]);
 
@@ -185,7 +174,6 @@ struct ReshapeConverter : public OpConversionPattern<triton::ReshapeOp>
     auto input      = adaptor.getSrc();
     auto inputType  = cast<RankedTensorType>(input.getType());
     auto outputType = cast<RankedTensorType>(op.getResult().getType());
-    if (isPointerLike(outputType)) return rewriter.notifyMatchFailure(op, "pointer reshape is preserved");
     if (!outputType.hasStaticShape()) return rewriter.notifyMatchFailure(op, "dynamic reshape shape is preserved");
 
     if (auto maybeReassociationMap = getReassociationIndicesForReshape(inputType, outputType)) {

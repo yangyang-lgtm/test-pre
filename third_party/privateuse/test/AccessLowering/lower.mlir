@@ -1,4 +1,4 @@
-// RUN: privateuse-opt %s -privateuse-lower-structured-access -privateuse-ptr-to-memref \
+// RUN: privateuse-opt %s -privateuse-lower-structured-access -privateuse-ptr-to-memref -canonicalize \
 // RUN:   -privateuse-arith-to-linalg -canonicalize -one-shot-bufferize="allow-unknown-ops=1" \
 // RUN:   -canonicalize | FileCheck %s \
 // RUN:   --implicit-check-not=tt.load --implicit-check-not=tt.store \

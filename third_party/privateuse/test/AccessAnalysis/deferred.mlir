@@ -3,12 +3,11 @@
 // CHECK: [privateuse-access] op 1: tt.load rank=1 elem_bytes=4 offset=127 dims=[dim0={start:0,stride:-1,size:128}] mask=none deferred=negative_stride
 // CHECK-NEXT: [privateuse-access] op 2: tt.atomic_rmw rank=? elem_bytes=? offset=? dims=[] mask=? deferred=atomic
 // CHECK-NEXT: [privateuse-access] op 3: tt.descriptor_load rank=? elem_bytes=? offset=? dims=[] mask=? deferred=unsupported_descriptor
-// CHECK-NEXT: [privateuse-access] op 4: tt.gather rank=? elem_bytes=? offset=? dims=[] mask=? deferred=data_dependent_offset
-// CHECK-NEXT: [privateuse-access] op 6: tt.load rank=0 elem_bytes=8 offset=0 dims=[] mask=none deferred=none
-// CHECK-NEXT: [privateuse-access] op 8: tt.load rank=? elem_bytes=? offset=? dims=[] mask=? deferred=data_dependent_offset
-// CHECK-NEXT: [privateuse-access] op 9: tt.load rank=1 elem_bytes=4 offset=0 dims=[dim0={start:0,stride:0,size:128}] mask=none deferred=none
-// CHECK-NEXT: [privateuse-access] op 10: tt.load rank=? elem_bytes=? offset=? dims=[] mask=? deferred=data_dependent_offset
-// CHECK-NEXT: [privateuse-access] summary ops=11 loads=8 stores=0 atomics=1 descriptors=1 deferred=6 errors=3 reasons={negative_stride=1,data_dependent_offset=3,unsupported_descriptor=1,atomic=1}
+// CHECK-NEXT: [privateuse-access] op 5: tt.load rank=0 elem_bytes=8 offset=0 dims=[] mask=none deferred=none
+// CHECK-NEXT: [privateuse-access] op 7: tt.load rank=? elem_bytes=? offset=? dims=[] mask=? deferred=data_dependent_offset
+// CHECK-NEXT: [privateuse-access] op 8: tt.load rank=1 elem_bytes=4 offset=0 dims=[dim0={start:0,stride:0,size:128}] mask=none deferred=none
+// CHECK-NEXT: [privateuse-access] op 9: tt.load rank=? elem_bytes=? offset=? dims=[] mask=? deferred=data_dependent_offset
+// CHECK-NEXT: [privateuse-access] summary ops=10 loads=8 stores=0 atomics=1 descriptors=1 deferred=5 errors=3 reasons={negative_stride=1,data_dependent_offset=2,unsupported_descriptor=1,atomic=1}
 
 module attributes {privateuse.grid = array<i64: 4, 1, 1>} {
   tt.func @negative_stride(%p: !tt.ptr<f32>) {
