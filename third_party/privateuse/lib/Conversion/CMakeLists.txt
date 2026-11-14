@@ -1,4 +1,7 @@
 add_subdirectory(AccessLowering)
 add_subdirectory(ArithToLinalg)
+add_subdirectory(ArithToPuarith)
 add_subdirectory(Bufferize)
+add_subdirectory(MathToPumath)
 add_subdirectory(MemrefToPumem)
+add_subdirectory(ScfToPumem)

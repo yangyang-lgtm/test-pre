@@ -186,7 +186,7 @@ def _fuse_and_bufferize(module):
     return module
 
 
-def _lower_linalg(module):
+def _transform(module):
     pm = ir.pass_manager(module.context)
     pm.enable_debug()
     privateuse.add_linalg_to_runtime_call(pm)
@@ -194,7 +194,11 @@ def _lower_linalg(module):
     privateuse.add_lower_linalg_reduce(pm)
     privateuse.add_convert_linalg_to_loops(pm)
     passes.common.add_canonicalizer(pm)
-    pm.run(module, 'lower_linalg')
+    privateuse.add_scf_to_pumem(pm)
+    privateuse.add_arith_to_puarith(pm)
+    privateuse.add_math_to_pumath(pm)
+    passes.common.add_canonicalizer(pm)
+    pm.run(module, 'transform')
     return module
 
 
@@ -206,6 +210,7 @@ def _lower_to_pumem(module):
     privateuse.add_memref_to_pumem(pm)
     privateuse.add_sink_constant_call_args(pm)
     passes.common.add_canonicalizer(pm)
+    privateuse.add_arith_to_puarith(pm)
     pm.run(module, 'lower_to_pumem')
     return module
 
@@ -223,7 +228,7 @@ def lower_kernel_ir(kernel_ir, grid, device_info, kernel_name, args):
     module = _parse_ir(kernel_ir)
     module = _specialize_ir(module, grid, constants, device_info["lower"]["num_pids"])
     module = _fuse_and_bufferize(module)
-    module = _lower_linalg(module)
+    module = _transform(module)
     module = _lower_to_pumem(module)
     print(module)
     cpp = _emit_cpp(module, device_info)

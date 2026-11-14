@@ -7,5 +7,7 @@ add_triton_library(PUMemIR
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRSupport
+  MLIRControlFlowInterfaces
+  MLIRLoopLikeInterface
   MLIRSideEffectInterfaces
 )

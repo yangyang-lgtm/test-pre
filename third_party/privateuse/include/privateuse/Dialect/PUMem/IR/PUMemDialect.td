@@ -3,6 +3,8 @@
 
 include "mlir/IR/OpBase.td"
 include "mlir/IR/AttrTypeBase.td"
+include "mlir/Interfaces/ControlFlowInterfaces.td"
+include "mlir/Interfaces/LoopLikeInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
 def PUMem_Dialect : Dialect {
@@ -233,7 +235,7 @@ def PUMem_GatherOp : PUMEM_Op<"gather", [AttrSizedOperandSegments]> {
                    sizes = (%n, %m), indices_strides = (%m, %c1),
                    destination_strides = (%m, %c1), mask = %mask,
                    mask_strides = (%m, %c1), other %fill
-                   : !pumem.ptr<f32, 0>, !pumem.ptr<i32, 128>, !pumem.ptr<f32, 128>, !pumem.ptr<i1, 128>, f32
+                   : !pumem.ptr<f32, 0>, !pumem.ptr<i32, 128>, !pumem.ptr<f32, 128>, !pumem.ptr<i8, 128>, f32
   }];
   let arguments = (ins Arg<PUMem_Ptr, "flat buffer read at the given element offsets", [MemRead]>:$source,
                        Index:$source_stride,
@@ -302,5 +304,165 @@ def PUMem_RuntimeCallOp : PUMEM_Op<"runtime_call", [MemoryEffects<[MemRead, MemW
   let results = (outs Variadic<AnyType>:$results);
   let assemblyFormat = "$callee (`<` $templateArgs^ `>`)? `(` $operands `)` attr-dict `:` functional-type($operands, results)";
 }
+
+def PUMem_YieldOp : PUMEM_Op<"yield",
+    [Pure, ReturnLike, Terminator,
+     ParentOneOf<["pumem::ForOp", "pumem::IfOp"]>]> {
+  let summary = "loop yield and termination operation";
+
+  let description = [{
+    The `pumem.yield` operation yields an SSA value from a pumem region and
+    terminates it. If the parent operation defines no values, the
+    `pumem.yield` may be left out in the custom syntax and the builders will
+    insert one implicitly.
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$results);
+
+  let builders = [OpBuilder<(ins), [{ /* nothing to do */ }]>];
+
+  let assemblyFormat = "attr-dict ($results^ `:` type($results))?";
+}
+
+//===----------------------------------------------------------------------===//
+// ForOp (mirrors scf.for)
+//===----------------------------------------------------------------------===//
+
+def PUMem_ForOp : PUMEM_Op<"for",
+    [SingleBlock, SingleBlockImplicitTerminator<"pumem::YieldOp">,
+     RecursiveMemoryEffects,
+     DeclareOpInterfaceMethods<LoopLikeOpInterface,
+      ["getLoopRegions", "getLoopInductionVars", "getLoopLowerBounds",
+       "getLoopUpperBounds", "getLoopSteps", "setLoopLowerBounds",
+       "setLoopUpperBounds", "setLoopSteps", "getInitsMutable",
+       "getYieldedValuesMutable", "getLoopResults",
+       "getStaticTripCount", "isValidInductionVarType",
+       "replaceWithAdditionalYields"]>]> {
+  let summary = "for operation";
+
+  let description = [{
+    The `pumem.for` operation represents a loop whose first three operands
+    are the lower bound, upper bound and step respectively. The operation has
+    one region capturing the loop body. The induction variable is represented
+    as an argument of this region.
+
+    Lower bound, upper bound, and step are `index` values (like everywhere
+    else in the pumem dialect: alloc/addptr/copy all use `index`). The lower
+    and upper bounds specify a half-open range, including the lower bound but
+    excluding the upper bound.
+
+    `pumem.for` can also operate on loop-carried variables and returns the
+    final values after loop termination. The initial values of the variables
+    are passed as additional SSA operands following the three loop control
+    operands. The region has an argument for the induction variable, followed
+    by one argument for each loop-carried variable.
+
+    Example:
+    ```mlir
+    %sum = pumem.for %i = %lb to %ub step %c1
+           iter_args(%acc = %init) -> (f32) {
+      pumem.yield %next : f32
+    }
+    ```
+  }];
+
+  let arguments = (ins Index:$lowerBound,
+                       Index:$upperBound,
+                       Index:$step,
+                       Variadic<AnyType>:$initArgs);
+  let results = (outs Variadic<AnyType>:$results);
+  let regions = (region SizedRegion<1>:$region);
+
+  let skipDefaultBuilders = 1;
+  let builders = [OpBuilder<(ins "Value":$lowerBound, "Value":$upperBound,
+      "Value":$step, CArg<"ValueRange", "{}">:$initArgs,
+      CArg<"function_ref<void(OpBuilder &, Location, Value, ValueRange)>",
+           "nullptr">)>];
+
+  let extraClassDeclaration = [{
+    using BodyBuilderFn =
+        function_ref<void(OpBuilder &, Location, Value, ValueRange)>;
+
+    Value getInductionVar() { return getBody()->getArgument(0); }
+
+    /// Number of induction variables, always 1 for pumem::ForOp.
+    unsigned getNumInductionVars() { return 1; }
+
+    /// Number of region arguments for loop-carried values.
+    unsigned getNumRegionIterArgs() {
+      return getBody()->getNumArguments() - getNumInductionVars();
+    }
+
+    /// Return the `index`-th region iteration argument.
+    BlockArgument getRegionIterArg(unsigned index) {
+      if (!(index < getNumRegionIterArgs()))
+        llvm::report_fatal_error("expected an index less than the number of region iter args");
+      return getBody()->getArguments().drop_front(getNumInductionVars())[index];
+    }
+
+    Block::BlockArgListType getRegionIterArgs() {
+      return getBody()->getArguments().drop_front(getNumInductionVars());
+    }
+
+    /// Number of operands controlling the loop: lb, ub, step.
+    unsigned getNumControlOperands() { return 3; }
+
+    Region &getBodyRegion() { return getOperation()->getRegion(0); }
+    Block *getBody() { return &getBodyRegion().front(); }
+
+    void setLowerBound(Value bound) { setOperand(0, bound); }
+    void setUpperBound(Value bound) { setOperand(1, bound); }
+    void setStep(Value step) { setOperand(2, step); }
+  }];
+
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+  let hasRegionVerifier = 1;
+}
+
+// IfOp (mirrors scf.if)
+//===----------------------------------------------------------------------===//
+
+def PUMem_IfOp : PUMEM_Op<"if",
+    [SingleBlock, SingleBlockImplicitTerminator<"pumem::YieldOp">,
+     RecursiveMemoryEffects, NoRegionArguments]> {
+  let summary = "if-then-else operation";
+
+  let description = [{
+    The `pumem.if` operation represents an if-then-else construct for
+    conditional execution. The operation takes one `i8` condition (matching
+    the `i8` boolean produced by integer/pointer comparisons in the pumem
+    world) and two regions. Results, when present, must be yielded by both
+    regions, which requires the else region to exist.
+
+    Example:
+    ```mlir
+    %r = pumem.if %cond -> (f32) {
+      pumem.yield %a : f32
+    } else {
+      pumem.yield %b : f32
+    }
+    ```
+  }];
+
+  let arguments = (ins I8:$condition);
+  let results = (outs Variadic<AnyType>:$results);
+  let regions = (region SizedRegion<1>:$thenRegion,
+                        MaxSizedRegion<1>:$elseRegion);
+
+  let skipDefaultBuilders = 1;
+  let builders = [
+    OpBuilder<(ins "TypeRange":$resultTypes, "Value":$cond)>,
+    OpBuilder<(ins "TypeRange":$resultTypes, "Value":$cond,
+                   "bool":$addThenBlock, "bool":$addElseBlock)>,
+    OpBuilder<(ins "TypeRange":$resultTypes, "Value":$cond,
+                   "bool":$withElseRegion)>,
+    OpBuilder<(ins "Value":$cond, CArg<"bool", "true">:$withElseRegion)>
+  ];
+
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
 
 #endif

@@ -2,6 +2,9 @@
 #include "privateuse/Conversion/ArithToLinalg/Passes.h"
 #include "privateuse/Conversion/Bufferize/Passes.h"
 #include "privateuse/Conversion/MemrefToPumem/Passes.h"
+#include "privateuse/Conversion/MathToPumath/MathToPumath.h"
+#include "privateuse/Conversion/ArithToPuarith/ArithToPuarith.h"
+#include "privateuse/Conversion/ScfToPumem/ScfToPumem.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
 #include "privateuse/Transform/LinalgToRuntimeCall/Passes.h"
 #include "privateuse/Transform/LowerLinalgReduce/Passes.h"
@@ -120,6 +123,12 @@ void init_triton_privateuse(py::module_& m)
   m.def("add_ptr_to_memref", [](PassManager& pm) { pm.addPass(triton::createPtrToMemrefPass()); }, py::arg("pm"));
 
   m.def("add_arith_to_linalg", [](PassManager& pm) { pm.addPass(triton::createArithToLinalgPass()); }, py::arg("pm"));
+
+  m.def("add_arith_to_puarith", [](PassManager& pm) { pm.addPass(triton::createArithToPuarithPass()); }, py::arg("pm"));
+
+  m.def("add_math_to_pumath", [](PassManager& pm) { pm.addPass(triton::createMathToPumathPass()); }, py::arg("pm"));
+
+  m.def("add_scf_to_pumem", [](PassManager& pm) { pm.addPass(triton::createScfToPumemPass()); }, py::arg("pm"));
 
   m.def(
     "add_outline_linalg_ops", [](PassManager& pm) { pm.addPass(triton::createOutlineLinalgOpsPass()); }, py::arg("pm")

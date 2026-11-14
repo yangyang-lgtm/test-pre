@@ -570,23 +570,23 @@ public:
   }
 };
 
-class ForOpLowering : public OpConversionPattern<scf::ForOp>
+template <typename OpT> class ForOpLowering : public OpConversionPattern<OpT>
 {
 public:
-  using OpConversionPattern::OpConversionPattern;
+  using OpConversionPattern<OpT>::OpConversionPattern;
+  using OneToNOpAdaptor = typename OpConversionPattern<OpT>::OneToNOpAdaptor;
 
-  LogicalResult
-  matchAndRewrite(scf::ForOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
+  LogicalResult matchAndRewrite(OpT op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
     SmallVector<size_t> resultCounts;
-    if (failed(getConvertedCounts(op.getResultTypes(), *getTypeConverter(), resultCounts)))
+    if (failed(getConvertedCounts(op.getResultTypes(), *this->getTypeConverter(), resultCounts)))
       return rewriter.notifyMatchFailure(op, "cannot convert loop result types");
 
-    if (failed(rewriter.convertRegionTypes(&op.getRegion(), *getTypeConverter())))
+    if (failed(rewriter.convertRegionTypes(&op.getRegion(), *this->getTypeConverter())))
       return rewriter.notifyMatchFailure(op, "cannot convert loop region types");
 
     SmallVector<Value> initArgs = flattenValues(adaptor.getInitArgs());
-    auto newOp                  = scf::ForOp::create(
+    auto newOp                  = OpT::create(
       rewriter, op.getLoc(), adaptor.getLowerBound().front(), adaptor.getUpperBound().front(),
       adaptor.getStep().front(), initArgs
     );
@@ -605,26 +605,26 @@ public:
   }
 };
 
-class IfOpLowering : public OpConversionPattern<scf::IfOp>
+template <typename OpT> class IfOpLowering : public OpConversionPattern<OpT>
 {
 public:
-  using OpConversionPattern::OpConversionPattern;
+  using OpConversionPattern<OpT>::OpConversionPattern;
+  using OneToNOpAdaptor = typename OpConversionPattern<OpT>::OneToNOpAdaptor;
 
-  LogicalResult
-  matchAndRewrite(scf::IfOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
+  LogicalResult matchAndRewrite(OpT op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
     SmallVector<Type> resultTypes;
     SmallVector<size_t> resultCounts;
     for (Type type : op.getResultTypes()) {
       SmallVector<Type> converted;
-      if (failed(getTypeConverter()->convertTypes(type, converted)))
+      if (failed(this->getTypeConverter()->convertTypes(type, converted)))
         return rewriter.notifyMatchFailure(op, "cannot convert if result types");
       resultTypes.append(converted.begin(), converted.end());
       resultCounts.push_back(converted.size());
     }
 
     bool withElseRegion = !op.getElseRegion().empty();
-    auto newOp = scf::IfOp::create(rewriter, op.getLoc(), resultTypes, adaptor.getCondition().front(), withElseRegion);
+    auto newOp = OpT::create(rewriter, op.getLoc(), resultTypes, adaptor.getCondition().front(), withElseRegion);
     newOp->setAttrs(op->getAttrs());
     rewriter.eraseBlock(&newOp.getThenRegion().front());
     if (withElseRegion) rewriter.eraseBlock(&newOp.getElseRegion().front());
@@ -643,16 +643,16 @@ public:
   }
 };
 
-class YieldOpLowering : public OpConversionPattern<scf::YieldOp>
+template <typename OpT> class YieldOpLowering : public OpConversionPattern<OpT>
 {
 public:
-  using OpConversionPattern::OpConversionPattern;
+  using OpConversionPattern<OpT>::OpConversionPattern;
+  using OneToNOpAdaptor = typename OpConversionPattern<OpT>::OneToNOpAdaptor;
 
-  LogicalResult
-  matchAndRewrite(scf::YieldOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
+  LogicalResult matchAndRewrite(OpT op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
     SmallVector<Value> operands = flattenValues(adaptor.getResults());
-    rewriter.replaceOpWithNewOp<scf::YieldOp>(op, operands);
+    rewriter.replaceOpWithNewOp<OpT>(op, operands);
     return success();
   }
 };
@@ -805,9 +805,9 @@ struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
     patterns.add<RankOpLowering>(converter, &getContext());
     patterns.add<ExtractStridedMetadataOpLowering>(converter, &getContext());
     patterns.add<ReinterpretCastOpLowering>(converter, &getContext());
-    patterns.add<ForOpLowering>(converter, &getContext());
-    patterns.add<IfOpLowering>(converter, &getContext());
-    patterns.add<YieldOpLowering>(converter, &getContext());
+    patterns.add<ForOpLowering<scf::ForOp>, ForOpLowering<pumem::ForOp>>(converter, &getContext());
+    patterns.add<IfOpLowering<scf::IfOp>, IfOpLowering<pumem::IfOp>>(converter, &getContext());
+    patterns.add<YieldOpLowering<scf::YieldOp>, YieldOpLowering<pumem::YieldOp>>(converter, &getContext());
     patterns.add<FuncOpLowering>(converter, &getContext());
     patterns.add<CallOpLowering>(converter, &getContext());
     patterns.add<ReturnOpLowering>(converter, &getContext());

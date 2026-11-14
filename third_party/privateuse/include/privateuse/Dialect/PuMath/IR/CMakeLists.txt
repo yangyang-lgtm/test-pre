@@ -1,0 +1,6 @@
+set(LLVM_TARGET_DEFINITIONS PuMathDialect.td)
+mlir_tablegen(PuMathDialect.h.inc -gen-dialect-decls -dialect=pumath)
+mlir_tablegen(PuMathDialect.cpp.inc -gen-dialect-defs -dialect=pumath)
+mlir_tablegen(PuMathOps.h.inc -gen-op-decls)
+mlir_tablegen(PuMathOps.cpp.inc -gen-op-defs)
+add_public_tablegen_target(PuMathTableGen)

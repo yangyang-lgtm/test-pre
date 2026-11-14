@@ -12,6 +12,11 @@ add_triton_plugin(TritonPrivateUse ${CMAKE_CURRENT_SOURCE_DIR}/privateuse.cc LIN
   PrivateUseTransforms
   PrivateUseUtils
   PUMemIR
+  PuArithIR
+  PuMathIR
+  ArithToPuarith
+  MathToPumath
+  ScfToPumem
   ${conversion_libs}
   ${extension_libs}
   MLIRSparseTensorTransforms
