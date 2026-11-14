@@ -2,6 +2,7 @@
 #include "privateuse/Conversion/ArithToLinalg/Passes.h"
 #include "privateuse/Conversion/Bufferize/Passes.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
+#include "privateuse/Transform/PidLoop/Passes.h"
 #include "privateuse/Transform/SpecializeKernel/SpecializeKernel.h"
 #include "privateuse/Utils/AccessAnalysis/Passes.h"
 
@@ -10,6 +11,7 @@
 #include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Bufferization/Transforms/Passes.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/ControlFlow/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
@@ -87,6 +89,16 @@ void init_triton_privateuse(py::module_& m)
   );
 
   m.def("add_analyze_access", [](PassManager& pm) { pm.addPass(triton::createAnalyzeAccessPass()); }, py::arg("pm"));
+
+  m.def(
+    "add_pid_loop", [](PassManager& pm, int64_t numPids) { pm.addPass(triton::createPidLoopPass(numPids)); },
+    py::arg("pm"), py::arg("num_pids")
+  );
+
+  m.def(
+    "add_empty_tensor_to_alloc_tensor",
+    [](PassManager& pm) { pm.addPass(bufferization::createEmptyTensorToAllocTensorPass()); }, py::arg("pm")
+  );
 
   m.def(
     "add_lower_structured_access", [](PassManager& pm) { pm.addPass(triton::createLowerStructuredAccessPass()); },

@@ -38,14 +38,6 @@ def _entry_name(mod):
 
 
 class DeviceInfo:
-    """Single source of truth for everything that shapes the generated kernel.
-
-    A value that can change the artifact belongs here -- either as a device
-    fact (fields) or as a lowering parameter (lower) -- so the cache key
-    derived from it stays complete. Nothing downstream may take a codegen
-    parameter from anywhere else.
-    """
-
     def __init__(self, fields, lower):
         self.fields = dict(fields)
         self.lower = dict(lower)
@@ -165,7 +157,7 @@ def _parse_ir(kernel_ir):
     return module
 
 
-def _specialize_ir(module, grid, constants):
+def _specialize_ir(module, grid, constants, num_pids):
     pm = ir.pass_manager(module.context)
     pm.enable_debug()
     privateuse.add_specialize_kernel(pm, constants, [int(dim) for dim in grid])
@@ -177,6 +169,7 @@ def _specialize_ir(module, grid, constants):
     privateuse.add_ptr_to_memref(pm)
     passes.common.add_canonicalizer(pm)
     privateuse.add_arith_to_linalg(pm)
+    privateuse.add_pid_loop(pm, num_pids)
     passes.common.add_canonicalizer(pm)
     passes.common.add_cse(pm)
     pm.run(module, 'specialize_kernel')
@@ -186,6 +179,7 @@ def _specialize_ir(module, grid, constants):
 def _fuse_and_bufferize(module):
     pm = ir.pass_manager(module.context)
     pm.enable_debug()
+    privateuse.add_empty_tensor_to_alloc_tensor(pm)
     privateuse.add_bufferize(pm)
     passes.common.add_canonicalizer(pm)
     pm.run(module, 'fuse_and_bufferize')
@@ -203,7 +197,7 @@ def _compile_object(cpp, device_info):
 def lower_kernel_ir(kernel_ir, grid, device_info, kernel_name, args):
     constants = _kernel_constants(kernel_ir, kernel_name, args)
     module = _parse_ir(kernel_ir)
-    module = _specialize_ir(module, grid, constants)
+    module = _specialize_ir(module, grid, constants, device_info["lower"]["num_pids"])
     module = _fuse_and_bufferize(module)
     print(module)
     cpp = _emit_cpp(module, device_info)

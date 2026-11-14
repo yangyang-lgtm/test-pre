@@ -1,1 +1,2 @@
+add_subdirectory(PidLoop)
 add_subdirectory(SpecializeKernel)

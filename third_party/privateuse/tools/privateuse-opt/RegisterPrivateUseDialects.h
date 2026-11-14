@@ -40,6 +40,7 @@
 #include "privateuse/Conversion/ArithToLinalg/Passes.h"
 #include "privateuse/Conversion/Bufferize/Passes.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
+#include "privateuse/Transform/PidLoop/Passes.h"
 #include "privateuse/Transform/SpecializeKernel/Passes.h"
 #include "privateuse/Utils/AccessAnalysis/Passes.h"
 
@@ -69,6 +70,7 @@ inline void registerPrivateUseDialects(mlir::DialectRegistry& registry)
   mlir::triton::registerAccessLoweringPasses();
   mlir::triton::registerArithToLinalgPasses();
   mlir::triton::registerBufferizePasses();
+  mlir::triton::registerPidLoopPasses();
   mlir::triton::registerSpecializeKernelPass();
   // clang-format off
   registry.insert<

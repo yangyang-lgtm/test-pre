@@ -11,6 +11,8 @@ from pathlib import Path
 from triton.runtime.cache import get_cache_manager
 from triton.backends.driver import DriverBase
 from triton.backends.compiler import GPUTarget
+
+
 def _scalar_args(args):
     return tuple(arg for arg in args if not hasattr(arg, "data_ptr"))
 
