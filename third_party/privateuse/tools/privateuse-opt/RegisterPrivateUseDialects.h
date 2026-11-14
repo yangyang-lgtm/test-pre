@@ -41,6 +41,7 @@
 #include "privateuse/Conversion/Bufferize/Passes.h"
 #include "privateuse/Conversion/MemrefToPumem/Passes.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
+#include "privateuse/Transform/LinalgToRuntimeCall/Passes.h"
 #include "privateuse/Transform/LowerLinalgReduce/Passes.h"
 #include "privateuse/Transform/OutlineLinalgOps/Passes.h"
 #include "privateuse/Transform/PidLoop/Passes.h"
@@ -75,6 +76,7 @@ inline void registerPrivateUseDialects(mlir::DialectRegistry& registry)
   mlir::triton::registerArithToLinalgPasses();
   mlir::triton::registerBufferizePasses();
   mlir::triton::registerMemrefToPumemPasses();
+  mlir::triton::registerLinalgToRuntimeCallPasses();
   mlir::triton::registerLowerLinalgReducePasses();
   mlir::triton::registerOutlineLinalgOpsPasses();
   mlir::triton::registerPidLoopPasses();

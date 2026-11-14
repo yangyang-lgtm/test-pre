@@ -1,3 +1,4 @@
+add_subdirectory(LinalgToRuntimeCall)
 add_subdirectory(LowerLinalgReduce)
 add_subdirectory(OutlineLinalgOps)
 add_subdirectory(PidLoop)

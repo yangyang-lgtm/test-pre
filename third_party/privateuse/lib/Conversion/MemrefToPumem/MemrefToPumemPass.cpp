@@ -429,6 +429,30 @@ public:
   }
 };
 
+class RuntimeCallOpLowering : public OpConversionPattern<RuntimeCallOp>
+{
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(RuntimeCallOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
+  {
+    SmallVector<Value> operands;
+    for (auto [type, mapping] : llvm::zip_equal(op->getOperandTypes(), adaptor.getOperands())) {
+      if (auto memrefType = dyn_cast<MemRefType>(type)) {
+        operands.push_back(materializeElementPtr(rewriter, op.getLoc(), unpackMemRef(mapping, memrefType), {}));
+        continue;
+      }
+      operands.append(mapping.begin(), mapping.end());
+    }
+
+    auto templateArgs = op.getTemplateArgs() ? *op.getTemplateArgs() : ArrayAttr{};
+    RuntimeCallOp::create(rewriter, op.getLoc(), TypeRange{}, op.getCalleeAttr(), templateArgs, operands);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 class CastOpLowering : public OpConversionPattern<memref::CastOp>
 {
 public:
@@ -775,6 +799,7 @@ struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
     patterns.add<CopyOpLowering>(converter, &getContext());
     patterns.add<TileGatherOpLowering>(converter, &getContext());
     patterns.add<TileScatterOpLowering>(converter, &getContext());
+    patterns.add<RuntimeCallOpLowering>(converter, &getContext());
     patterns.add<CastOpLowering>(converter, &getContext());
     patterns.add<DimOpLowering>(converter, &getContext());
     patterns.add<RankOpLowering>(converter, &getContext());

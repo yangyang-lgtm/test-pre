@@ -283,4 +283,24 @@ def PUMem_ScatterOp : PUMEM_Op<"scatter", [AttrSizedOperandSegments]> {
   let hasVerifier = 1;
 }
 
+def PUMem_RuntimeCallOp : PUMEM_Op<"runtime_call", [MemoryEffects<[MemRead, MemWrite]>]> {
+  let summary = "Direct call into the C++ runtime";
+
+  let description = [{
+    Calls a runtime function by name, optionally binding explicit template
+    arguments. The call is printed verbatim by the C++ emitter, so the callee
+    (plus template arguments, if any) must exist in the runtime header. Each
+    template argument is either a type or a compile-time value.
+
+    Example:
+      pumem.runtime_call @runtime_matmul<[f32, 4 : index, 16 : index, 8 : index]>(%a, %b, %c)
+        : (!pumem.ptr<f32, 128>, !pumem.ptr<f32, 128>, !pumem.ptr<f32, 128>) -> ()
+  }];
+  let arguments = (ins FlatSymbolRefAttr:$callee,
+                       OptionalAttr<ArrayAttr>:$templateArgs,
+                       Variadic<AnyType>:$operands);
+  let results = (outs Variadic<AnyType>:$results);
+  let assemblyFormat = "$callee (`<` $templateArgs^ `>`)? `(` $operands `)` attr-dict `:` functional-type($operands, results)";
+}
+
 #endif

@@ -33,7 +33,9 @@ def MemrefToPumem : Pass<"privateuse-memref-to-pumem", "mlir::ModuleOp"> {
     replaced by their flat counterparts pumem.gather and pumem.scatter, with
     every memref operand unpacked into its (pointer, offset, sizes, strides)
     tuple; the offset is folded into the pointer with pumem.addptr, so the
-    flat ops only take pointers. pumem.alloc uses SRAM, i.e. the memory space
+    flat ops only take pointers. pumem.runtime_call keeps its callee and
+    template arguments and lowers every memref operand to the adjusted
+    pointer. pumem.alloc uses SRAM, i.e. the memory space
     carried by the memref,
     and the alignment of the memref allocation when present, otherwise
     kDefaultAlignment; memrefs without a memory space live in DRAM

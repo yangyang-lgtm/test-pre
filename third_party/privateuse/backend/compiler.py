@@ -189,6 +189,7 @@ def _fuse_and_bufferize(module):
 def _lower_linalg(module):
     pm = ir.pass_manager(module.context)
     pm.enable_debug()
+    privateuse.add_linalg_to_runtime_call(pm)
     privateuse.add_outline_linalg_ops(pm)
     privateuse.add_lower_linalg_reduce(pm)
     privateuse.add_convert_linalg_to_loops(pm)

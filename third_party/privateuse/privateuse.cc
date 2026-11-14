@@ -3,6 +3,7 @@
 #include "privateuse/Conversion/Bufferize/Passes.h"
 #include "privateuse/Conversion/MemrefToPumem/Passes.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
+#include "privateuse/Transform/LinalgToRuntimeCall/Passes.h"
 #include "privateuse/Transform/LowerLinalgReduce/Passes.h"
 #include "privateuse/Transform/OutlineLinalgOps/Passes.h"
 #include "privateuse/Transform/PidLoop/Passes.h"
@@ -122,6 +123,11 @@ void init_triton_privateuse(py::module_& m)
 
   m.def(
     "add_outline_linalg_ops", [](PassManager& pm) { pm.addPass(triton::createOutlineLinalgOpsPass()); }, py::arg("pm")
+  );
+
+  m.def(
+    "add_linalg_to_runtime_call", [](PassManager& pm) { pm.addPass(triton::createLinalgToRuntimeCallPass()); },
+    py::arg("pm")
   );
 
   m.def(
