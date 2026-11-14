@@ -15,6 +15,7 @@
 #include "privateuse/Transform/PucLaunchKernel/Passes.h"
 #include "privateuse/Transform/PucLocalizeCarried/PucLocalizeCarried.h"
 #include "privateuse/Transform/PucSimplifyAssign/PucSimplifyAssign.h"
+#include "privateuse/Transform/PucVoidPtrArgs/PucVoidPtrArgs.h"
 #include "privateuse/Transform/SinkConstantCallArgs/Passes.h"
 #include "privateuse/Transform/SpecializeKernel/SpecializeKernel.h"
 #include "privateuse/Utils/AccessAnalysis/Passes.h"
@@ -189,6 +190,10 @@ void init_triton_privateuse(py::module_& m)
 
   m.def(
     "add_puc_simplify_assign", [](PassManager& pm) { pm.addPass(triton::createPucSimplifyAssignPass()); }, py::arg("pm")
+  );
+
+  m.def(
+    "add_puc_void_ptr_args", [](PassManager& pm) { pm.addPass(triton::createPucVoidPtrArgsPass()); }, py::arg("pm")
   );
 
   m.def(

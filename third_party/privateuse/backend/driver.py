@@ -236,8 +236,9 @@ def compile_module(launcher_src, kernel_placeholder_name, metadata, kernel_arg_i
         cache_path = cache.get_file(filename)
 
         if cache_path is None:
-            from triton.backends.privateuse.compiler import lower_kernel_ir
-            kernel_obj = lower_kernel_ir(cu_function, (gridX, gridY, gridZ), metadata.device_info, kernel_name, kernel_args)
+            from triton.backends.privateuse.compiler import DeviceInfo
+            device_info = DeviceInfo.from_dict(metadata.device_info)
+            kernel_obj = device_info.pipeline(cu_function, (gridX, gridY, gridZ), kernel_name, kernel_args)
 
             with tempfile.TemporaryDirectory() as tmpdir:
                 kernel_so_path = cache.put(kernel_obj, f"{kernel_name}.so", binary=True)
@@ -269,7 +270,7 @@ class PrivateUseLauncher(object):
     @staticmethod
     def cpu_or_self(value):
         import torch
-        if not isinstance(value, torch.Tensor) or value.device.type == "cpu":
+        if not isinstance(value, torch.Tensor):
             return value
         out = torch.empty_strided(value.shape, value.stride(), device="cpu", dtype=value.dtype)
         out.copy_(value)

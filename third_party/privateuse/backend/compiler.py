@@ -1,5 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
-from triton._C.libtriton import ir, passes, privateuse
+from triton._C.libtriton import get_cache_invalidating_env_vars, ir, passes, privateuse
+from triton.runtime.cache import triton_key
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 import hashlib
@@ -12,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 
+_BACKEND_DIR = Path(__file__).resolve().parent
 _EXTERN_C_RE = re.compile(r'extern\s+"C"\s+[\w\s\*&<>:]*?\b(\w+)\s*\(')
 _PTR_RE = re.compile(r"!tt\.ptr<(\w+)>")
 
@@ -30,6 +32,17 @@ _DTYPE_TO_IR = {
     "uint64": "ui64",
 }
 
+@functools.lru_cache(maxsize=1)
+def _compiler_digest():
+    digest = hashlib.sha256()
+    digest.update(triton_key().encode("utf-8"))
+    for path in sorted(_BACKEND_DIR.rglob("*")):
+        if path.is_file() and "__pycache__" not in path.parts:
+            digest.update(path.relative_to(_BACKEND_DIR).as_posix().encode("utf-8"))
+            digest.update(path.read_bytes())
+    digest.update(repr(sorted(get_cache_invalidating_env_vars().items())).encode("utf-8"))
+    return digest.hexdigest()
+
 
 def _entry_name(mod):
     _FUNC_RE = re.compile(r"^\s*(?:tt\.func|func\.func)\s+(?:(?:private|public|nested)\s+)?@([\w.$]+)", re.MULTILINE)
@@ -37,39 +50,6 @@ def _entry_name(mod):
     if found is None:
         raise RuntimeError("privateuse: no func.func found in the module after make_ttir")
     return found.group(1)
-
-
-class DeviceInfo:
-    def __init__(self, fields, lower):
-        self.fields = dict(fields)
-        self.lower = dict(lower)
-
-    @staticmethod
-    def from_options(target, options):
-        fields = {
-            "target_backend": target.backend,
-            "target_arch": target.arch,
-            "target_warp_size": target.warp_size,
-            "python_abi": f"{sys.version_info.major}.{sys.version_info.minor}",
-        }
-        lower = {
-            "runtime_backend": options.runtime_backend,
-            "num_pids": options.num_pids,
-            "num_blocks": options.num_blocks,
-            "block_bytes": options.block_bytes,
-            "launcher_attr": options.launcher_attr,
-            "kernel_attr": options.kernel_attr,
-            "outlined_attr": options.outlined_attr,
-        }
-        return DeviceInfo(fields, lower)
-
-    @staticmethod
-    def from_dict(payload):
-        return DeviceInfo(payload["fields"], payload["lower"])
-
-    def digest(self):
-        payload = repr((sorted(self.fields.items()), sorted(self.lower.items())))
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _check_entry_symbol(cpp, kernel_name):
@@ -127,144 +107,179 @@ def _arg_mismatch(arg, ir_type):
     return f"expected an int, got {type(arg).__name__}"
 
 
-def _kernel_constants(kernel_ir, kernel_name, args):
-    """Check the launch arguments against the kernel IR and return the (index, scalar) pairs to fold."""
-    types = _ir_param_types(kernel_ir, kernel_name)
-    if len(types) != len(args):
-        raise RuntimeError(f"privateuse: kernel '{kernel_name}' takes {len(types)} arguments {types}, "
-                           f"got {len(args)} {[type(arg).__name__ for arg in args]}")
-
-    constants = []
-    for index, (ir_type, arg) in enumerate(zip(types, args)):
-        mismatch = _arg_mismatch(arg, ir_type)
-        if mismatch is not None:
-            raise RuntimeError(f"privateuse: argument {index} of '{kernel_name}' is {ir_type}: {mismatch}")
-        if _PTR_RE.match(ir_type) is not None:
-            continue
-        if not isinstance(arg, (int, float)):
-            raise NotImplementedError(f"privateuse: cannot fold the scalar argument {arg!r}")
-        constants.append((index, arg))
-    return constants
-
-
-def _parse_ir(kernel_ir):
-    context = ir.context()
-    ir.load_dialects(context)
-    privateuse.load_dialects(context)
-
-    with tempfile.NamedTemporaryFile("w", suffix=".mlir", delete=False) as handle:
-        handle.write(kernel_ir)
-        path = handle.name
-    try:
-        module = ir.parse_mlir_module(path, context)
-    finally:
-        os.unlink(path)
-    module.context = context
-    return module
-
-
-def _specialize_ir(module, grid, constants, num_pids):
-    pm = ir.pass_manager(module.context)
-    pm.enable_debug()
-    privateuse.add_specialize_kernel(pm, constants, [int(dim) for dim in grid])
-    passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
-    passes.common.add_canonicalizer(pm)
-    privateuse.add_analyze_access(pm)
-    privateuse.add_lower_structured_access(pm)
-    privateuse.add_lower_unstructured_access(pm)
-    privateuse.add_ptr_to_memref(pm)
-    passes.common.add_canonicalizer(pm)
-    privateuse.add_arith_to_linalg(pm)
-    privateuse.add_pid_loop(pm, num_pids)
-    passes.common.add_canonicalizer(pm)
-    passes.common.add_cse(pm)
-    pm.run(module, 'specialize_kernel')
-    return module
-
-
-def _fuse_and_bufferize(module):
-    pm = ir.pass_manager(module.context)
-    pm.enable_debug()
-    privateuse.add_empty_tensor_to_alloc_tensor(pm)
-    privateuse.add_bufferize(pm)
-    passes.common.add_canonicalizer(pm)
-    pm.run(module, 'fuse_and_bufferize')
-    return module
-
-
-def _transform(module, device_info):
-    pm = ir.pass_manager(module.context)
-    pm.enable_debug()
-    privateuse.add_linalg_to_runtime_call(pm)
-    privateuse.add_outline_linalg_ops(pm, device_info["lower"]["outlined_attr"])
-    privateuse.add_lower_linalg_reduce(pm)
-    privateuse.add_convert_linalg_to_loops(pm)
-    passes.common.add_canonicalizer(pm)
-    privateuse.add_scf_to_pumem(pm)
-    privateuse.add_arith_to_puarith(pm)
-    privateuse.add_math_to_pumath(pm)
-    passes.common.add_canonicalizer(pm)
-    pm.run(module, 'transform')
-    return module
-
-
-def _lower_to_pumem(module):
-    pm = ir.pass_manager(module.context)
-    pm.enable_debug()
-    privateuse.add_expand_strided_metadata(pm)
-    privateuse.add_memref_expand(pm)
-    privateuse.add_memref_to_pumem(pm)
-    privateuse.add_sink_constant_call_args(pm)
-    privateuse.add_arith_to_puarith(pm)
-    passes.common.add_canonicalizer(pm)
-    passes.common.add_cse(pm)
-    pm.run(module, 'lower_to_pumem')
-    return module
-
-
-def _emit_cpp(module, device_info):
-    lower = device_info["lower"]
-    pm = ir.pass_manager(module.context)
-    pm.enable_debug()
-    privateuse.add_reconcile_unrealized_casts(pm)
-    privateuse.add_to_puc(pm)
-    privateuse.add_puc_localize_carried(pm)
-    privateuse.add_puc_simplify_assign(pm)
-    passes.common.add_cse(pm)
-    privateuse.add_puc_launch(pm, lower["launcher_attr"], lower["kernel_attr"])
-    passes.common.add_canonicalizer(pm)
-    pm.run(module, 'emit_cpp')
-    return privateuse.translate_puc_to_cpp(module, lower["runtime_backend"], lower["num_pids"])
-
-
 def _runtime_dir():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime")
 
 
-def _compile_object(cpp, device_info):
-    runtime_dir = _runtime_dir()
-    with tempfile.TemporaryDirectory() as tmpdir:
-        src_path = os.path.join(tmpdir, "kernel.cpp")
-        so_path = os.path.join(tmpdir, "kernel.so")
-        Path(src_path).write_text(cpp)
-        subprocess.check_call([
-            "g++", "-std=gnu++17", "-O2", "-fPIC", "-shared", f"-I{runtime_dir}", src_path,
-            os.path.join(runtime_dir, "cpu_backend_runtime.cpp"), "-o", so_path
-        ])
-        return Path(so_path).read_bytes()
+class LoweringPipeline:
+    def __init__(self, lower):
+        self._lower = lower
+
+    def digest(self):
+        return _compiler_digest()
+
+    def __call__(self, kernel_ir, grid, kernel_name, args):
+        constants = self._kernel_constants(kernel_ir, kernel_name, args)
+        module = self._parse_ir(kernel_ir)
+        module = self._specialize(module, grid, constants)
+        module = self._fuse_and_bufferize(module)
+        module = self._transform(module)
+        module = self._lower_to_pumem(module)
+        cpp = self._emit_cpp(module)
+        _check_entry_symbol(cpp, kernel_name)
+        return self._compile_object(cpp)
+
+    def _kernel_constants(self, kernel_ir, kernel_name, args):
+        types = _ir_param_types(kernel_ir, kernel_name)
+        if len(types) != len(args):
+            raise RuntimeError(f"privateuse: kernel '{kernel_name}' takes {len(types)} arguments {types}, "
+                               f"got {len(args)} {[type(arg).__name__ for arg in args]}")
+
+        constants = []
+        for index, (ir_type, arg) in enumerate(zip(types, args)):
+            mismatch = _arg_mismatch(arg, ir_type)
+            if mismatch is not None:
+                raise RuntimeError(f"privateuse: argument {index} of '{kernel_name}' is {ir_type}: {mismatch}")
+            if _PTR_RE.match(ir_type) is not None:
+                continue
+            if not isinstance(arg, (int, float)):
+                raise NotImplementedError(f"privateuse: cannot fold the scalar argument {arg!r}")
+            constants.append((index, arg))
+        return constants
+
+    def _parse_ir(self, kernel_ir):
+        context = ir.context()
+        ir.load_dialects(context)
+        privateuse.load_dialects(context)
+
+        with tempfile.NamedTemporaryFile("w", suffix=".mlir", delete=False) as handle:
+            handle.write(kernel_ir)
+            path = handle.name
+        try:
+            module = ir.parse_mlir_module(path, context)
+        finally:
+            os.unlink(path)
+        module.context = context
+        return module
+
+    def _specialize(self, module, grid, constants):
+        pm = ir.pass_manager(module.context)
+        pm.enable_debug()
+        privateuse.add_specialize_kernel(pm, constants, [int(dim) for dim in grid])
+        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
+        passes.common.add_canonicalizer(pm)
+        privateuse.add_analyze_access(pm)
+        privateuse.add_lower_structured_access(pm)
+        privateuse.add_lower_unstructured_access(pm)
+        privateuse.add_ptr_to_memref(pm)
+        passes.common.add_canonicalizer(pm)
+        privateuse.add_arith_to_linalg(pm)
+        privateuse.add_pid_loop(pm, self._lower["num_pids"])
+        passes.common.add_canonicalizer(pm)
+        passes.common.add_cse(pm)
+        pm.run(module, 'specialize_kernel')
+        return module
+
+    def _fuse_and_bufferize(self, module):
+        pm = ir.pass_manager(module.context)
+        pm.enable_debug()
+        privateuse.add_empty_tensor_to_alloc_tensor(pm)
+        privateuse.add_bufferize(pm)
+        passes.common.add_canonicalizer(pm)
+        pm.run(module, 'fuse_and_bufferize')
+        return module
+
+    def _transform(self, module):
+        pm = ir.pass_manager(module.context)
+        pm.enable_debug()
+        privateuse.add_linalg_to_runtime_call(pm)
+        privateuse.add_outline_linalg_ops(pm, self._lower["outlined_attr"])
+        privateuse.add_lower_linalg_reduce(pm)
+        privateuse.add_convert_linalg_to_loops(pm)
+        passes.common.add_canonicalizer(pm)
+        privateuse.add_scf_to_pumem(pm)
+        privateuse.add_arith_to_puarith(pm)
+        privateuse.add_math_to_pumath(pm)
+        passes.common.add_canonicalizer(pm)
+        pm.run(module, 'transform')
+        return module
+
+    def _lower_to_pumem(self, module):
+        pm = ir.pass_manager(module.context)
+        pm.enable_debug()
+        privateuse.add_expand_strided_metadata(pm)
+        privateuse.add_memref_expand(pm)
+        privateuse.add_memref_to_pumem(pm)
+        privateuse.add_sink_constant_call_args(pm)
+        privateuse.add_arith_to_puarith(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.common.add_cse(pm)
+        pm.run(module, 'lower_to_pumem')
+        return module
+
+    def _emit_cpp(self, module):
+        lower = self._lower
+        pm = ir.pass_manager(module.context)
+        pm.enable_debug()
+        privateuse.add_reconcile_unrealized_casts(pm)
+        privateuse.add_to_puc(pm)
+        privateuse.add_puc_localize_carried(pm)
+        privateuse.add_puc_simplify_assign(pm)
+        privateuse.add_puc_void_ptr_args(pm)
+        passes.common.add_cse(pm)
+        privateuse.add_puc_launch(pm, lower["launcher_attr"], lower["kernel_attr"])
+        passes.common.add_canonicalizer(pm)
+        pm.run(module, 'emit_cpp')
+        return privateuse.translate_puc_to_cpp(module, lower["runtime_backend"], lower["num_pids"])
+
+    def _compile_object(self, cpp):
+        runtime_dir = _runtime_dir()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src_path = os.path.join(tmpdir, "kernel.cpp")
+            so_path = os.path.join(tmpdir, "kernel.so")
+            Path(src_path).write_text(cpp)
+            subprocess.check_call([
+                "g++", "-std=gnu++17", "-O2", "-fPIC", "-shared", f"-I{runtime_dir}", src_path,
+                os.path.join(runtime_dir, "cpu_backend_runtime.cpp"), "-o", so_path
+            ])
+            return Path(so_path).read_bytes()
 
 
-def lower_kernel_ir(kernel_ir, grid, device_info, kernel_name, args):
-    constants = _kernel_constants(kernel_ir, kernel_name, args)
-    module = _parse_ir(kernel_ir)
-    module = _specialize_ir(module, grid, constants, device_info["lower"]["num_pids"])
-    module = _fuse_and_bufferize(module)
-    module = _transform(module, device_info)
-    module = _lower_to_pumem(module)
-    cpp = _emit_cpp(module, device_info)
-    print(cpp)
-    _check_entry_symbol(cpp, kernel_name)
-    return _compile_object(cpp, device_info)
+class DeviceInfo:
+    def __init__(self, fields, lower):
+        self.fields = dict(fields)
+        self.lower = dict(lower)
+
+    @property
+    def pipeline(self):
+        return LoweringPipeline(self.lower)
+
+    @staticmethod
+    def from_options(target, options):
+        fields = {
+            "target_backend": target.backend,
+            "target_arch": target.arch,
+            "target_warp_size": target.warp_size,
+            "python_abi": f"{sys.version_info.major}.{sys.version_info.minor}",
+        }
+        lower = {
+            "runtime_backend": options.runtime_backend,
+            "num_pids": options.num_pids,
+            "num_blocks": options.num_blocks,
+            "block_bytes": options.block_bytes,
+            "launcher_attr": options.launcher_attr,
+            "kernel_attr": options.kernel_attr,
+            "outlined_attr": options.outlined_attr,
+        }
+        return DeviceInfo(fields, lower)
+
+    @staticmethod
+    def from_dict(payload):
+        return DeviceInfo(payload["fields"], payload["lower"])
+
+    def digest(self):
+        payload = repr((sorted(self.fields.items()), sorted(self.lower.items()), self.pipeline.digest()))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -352,7 +367,7 @@ class PrivateUseBackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        return self.target
+        return (self.target, _compiler_digest())
 
     def get_module_map(self) -> Dict[str, Any]:
         return {}
