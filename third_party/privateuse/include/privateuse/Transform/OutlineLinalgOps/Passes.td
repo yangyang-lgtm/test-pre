@@ -13,6 +13,10 @@ def OutlineLinalgOps : Pass<"privateuse-outline-linalg-ops", "mlir::ModuleOp"> {
     site becomes a func.call. Memrefs keep their ranked type, so the outlined
     functions feed the same conversion pipeline as the kernel itself.
   }];
+  let options = [
+    Option<"outlinedAttrValue", "outlined-attr-value", "std::string", "",
+           "Value assigned to the `pumem.outlined` attribute on newly outlined funcs">
+  ];
   let constructor = "mlir::triton::createOutlineLinalgOpsPass()";
 }
 

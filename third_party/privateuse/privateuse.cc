@@ -2,18 +2,25 @@
 #include "privateuse/Conversion/ArithToLinalg/Passes.h"
 #include "privateuse/Conversion/Bufferize/Passes.h"
 #include "privateuse/Conversion/MemrefToPumem/Passes.h"
+#include "privateuse/Conversion/ToPuc/Passes.h"
 #include "privateuse/Conversion/MathToPumath/MathToPumath.h"
 #include "privateuse/Conversion/ArithToPuarith/ArithToPuarith.h"
 #include "privateuse/Conversion/ScfToPumem/ScfToPumem.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
+#include "privateuse/Dialect/Puc/IR/PucDialect.h"
 #include "privateuse/Transform/LinalgToRuntimeCall/Passes.h"
 #include "privateuse/Transform/LowerLinalgReduce/Passes.h"
 #include "privateuse/Transform/OutlineLinalgOps/Passes.h"
 #include "privateuse/Transform/PidLoop/Passes.h"
+#include "privateuse/Transform/PucLaunchKernel/Passes.h"
+#include "privateuse/Transform/PucLocalizeCarried/PucLocalizeCarried.h"
+#include "privateuse/Transform/PucSimplifyAssign/PucSimplifyAssign.h"
 #include "privateuse/Transform/SinkConstantCallArgs/Passes.h"
 #include "privateuse/Transform/SpecializeKernel/SpecializeKernel.h"
 #include "privateuse/Utils/AccessAnalysis/Passes.h"
+#include "privateuse/PucTranslate/PucTranslate.h"
 
+#include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
@@ -61,6 +68,7 @@ void init_triton_privateuse(py::module_& m)
     // clang-format off
     registry.insert<
         mlir::pumem::PUMemDialect,
+        mlir::puc::PucDialect,
         mlir::triton::TritonDialect,
         mlir::func::FuncDialect,
         mlir::memref::MemRefDialect,
@@ -131,7 +139,9 @@ void init_triton_privateuse(py::module_& m)
   m.def("add_scf_to_pumem", [](PassManager& pm) { pm.addPass(triton::createScfToPumemPass()); }, py::arg("pm"));
 
   m.def(
-    "add_outline_linalg_ops", [](PassManager& pm) { pm.addPass(triton::createOutlineLinalgOpsPass()); }, py::arg("pm")
+    "add_outline_linalg_ops",
+    [](PassManager& pm, const std::string& attrValue) { pm.addPass(triton::createOutlineLinalgOpsPass(attrValue)); },
+    py::arg("pm"), py::arg("attr_value") = ""
   );
 
   m.def(
@@ -163,4 +173,39 @@ void init_triton_privateuse(py::module_& m)
   m.def("add_memref_expand", [](PassManager& pm) { pm.addPass(memref::createExpandOpsPass()); }, py::arg("pm"));
 
   m.def("add_memref_to_pumem", [](PassManager& pm) { pm.addPass(triton::createMemrefToPumemPass()); }, py::arg("pm"));
+
+  m.def(
+    "add_puc_launch",
+    [](PassManager& pm, const std::string& launcherAttr, const std::string& kernelAttr) {
+      pm.addPass(triton::createPucLaunchKernelPass(launcherAttr, kernelAttr));
+    },
+    py::arg("pm"), py::arg("launcher_attr") = "extern \"C\"", py::arg("kernel_attr") = "GLOBAL"
+  );
+
+  m.def(
+    "add_puc_localize_carried", [](PassManager& pm) { pm.addPass(triton::createPucLocalizeCarriedPass()); },
+    py::arg("pm")
+  );
+
+  m.def(
+    "add_puc_simplify_assign", [](PassManager& pm) { pm.addPass(triton::createPucSimplifyAssignPass()); }, py::arg("pm")
+  );
+
+  m.def(
+    "add_reconcile_unrealized_casts", [](PassManager& pm) { pm.addPass(mlir::createReconcileUnrealizedCastsPass()); },
+    py::arg("pm")
+  );
+
+  m.def("add_to_puc", [](PassManager& pm) { pm.addPass(triton::createToPucPass()); }, py::arg("pm"));
+
+  m.def(
+    "translate_puc_to_cpp",
+    [](ModuleOp& mod, const std::string& backend, int64_t numPids) -> std::string {
+      std::string out;
+      if (!puc::translatePucToCppString(mod.getOperation(), out, backend, numPids))
+        throw std::runtime_error("puc to cpp translation failed");
+      return out;
+    },
+    py::arg("mod"), py::arg("backend") = "cpu", py::arg("num_pids") = 32
+  );
 }

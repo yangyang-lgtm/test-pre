@@ -85,12 +85,6 @@ def _format_of(ty):
 
 
 def _generate_cpp_launcher(constants, signature, kernel_name):
-    """Launcher for the C++ (puc) kernels. Fully independent from the llir
-    launcher: the kernel takes raw home-annotated pointers (`DRAM/SRAM T*`)
-    instead of MLIR memref descriptors, and no ExecutionEngine/CRunnerUtils
-    helpers are used. The SRAM allocation pool is reset before every launch
-    (the per-kernel staging buffers are scratch memory)."""
-
     args_format = ''.join("O" if ty[0] == "*" else _format_of(ty) for ty in signature.values())
     format = "iiiOOOO" + args_format
 
@@ -98,13 +92,12 @@ def _generate_cpp_launcher(constants, signature, kernel_name):
         f"void* arg{i}" if ty[0] == "*" else f"{_ty_to_cpp(ty)} arg{i}"
         for i, ty in signature.items()
         if ty != "constexpr")
-    kernel_arg_decls = arg_decls + ', ' if arg_decls else ''
+
+    kernel_arg_decls = ', '.join(f"void* arg{i}" for i, ty in signature.items() if ty[0] == "*")
+    kernel_arg_decls = kernel_arg_decls + ', ' if kernel_arg_decls else ''
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
 
-    kernel_parameters = ', '.join(
-        f"arg{i}" if ty[0] == "*" else f"static_cast<{_ty_to_cpp(ty)}>(arg{i})"
-        for i, ty in signature.items()
-        if ty != "constexpr")
+    kernel_parameters = ', '.join(f"arg{i}" for i, ty in signature.items() if ty[0] == "*")
     kernel_parameters += ', ' if kernel_parameters else ''
 
     return f"""
@@ -233,7 +226,7 @@ def compile_module(launcher_src, kernel_placeholder_name, metadata, kernel_arg_i
                launch_enter_hook, launch_exit_hook, *args):
         kernel_name = kernel_metadata[6]
         kernel_args = [args[index] for index in kernel_arg_index]
-        src = launcher_src.replace(kernel_placeholder_name, kernel_name)
+        src = launcher_src.replace(kernel_placeholder_name, kernel_name + "_launcher")
 
         key = _cache_key(cu_function, src, (gridX, gridY, gridZ), _scalar_args(args), metadata.device_digest)
         cache = get_cache_manager(key)

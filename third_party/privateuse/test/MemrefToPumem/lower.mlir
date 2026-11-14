@@ -8,7 +8,8 @@
 
 // CHECK-LABEL: func.func @basic()
 tt.func @basic() {
-  // CHECK: pumem.alloc {{.*}} {alignment = 64 : i64} : !pumem.ptr<f32, 128>
+  // CHECK: pumem.alloc {{.*}}, {{.*}} : !pumem.ptr<void, 128>
+  // CHECK: pumem.point_cast {{.*}} : !pumem.ptr<void, 128> -> !pumem.ptr<f32, 128>
   %buf = memref.alloc() : memref<8xf32, 128>
   %c0 = arith.constant 0 : index
   // CHECK: pumem.load
@@ -28,7 +29,7 @@ tt.func @basic() {
 
 // CHECK-LABEL: func.func @aligned()
 tt.func @aligned() {
-  // CHECK: pumem.alloc {{.*}} {alignment = 256 : i64} : !pumem.ptr<f32, 128>
+  // CHECK: pumem.alloc {{.*}}, {{.*}} : !pumem.ptr<void, 128>
   %b = memref.alloc() {alignment = 256} : memref<8xf32, 128>
   memref.dealloc %b : memref<8xf32, 128>
   tt.return
@@ -41,7 +42,7 @@ tt.func @aligned() {
 // CHECK-SAME: %[[DST:.*]]: !pumem.ptr<f32, 0>
 // CHECK-SAME: %[[SRC:.*]]: !pumem.ptr<f32, 128>
 tt.func @copy(%dst: memref<4x8xf32, 0>, %src: memref<4x8xf32, 128>) {
-  // CHECK: pumem.copy %{{.*}}, %{{.*}}, sizes = ({{.*}}, {{.*}}), dst_strides = ({{.*}}, {{.*}}), src_strides = ({{.*}}, {{.*}}), byte_size %{{.*}} : !pumem.ptr<f32, 0>, !pumem.ptr<f32, 128>
+  // CHECK: pumem.copy %{{.*}}, %{{.*}}, sizes = ({{.*}}, {{.*}}), dst_strides = ({{.*}}, {{.*}}), src_strides = ({{.*}}, {{.*}}), byte_size %{{.*}} {dir = "sram_to_dram"} : !pumem.ptr<f32, 0>, !pumem.ptr<f32, 128>
   memref.copy %src, %dst : memref<4x8xf32, 128> to memref<4x8xf32, 0>
   tt.return
 }
@@ -51,7 +52,7 @@ tt.func @copy(%dst: memref<4x8xf32, 0>, %src: memref<4x8xf32, 128>) {
 
 // CHECK-LABEL: func.func @default_space()
 tt.func @default_space() {
-  // CHECK: pumem.alloc {{.*}} {alignment = 64 : i64} : !pumem.ptr<f32, 0>
+  // CHECK: pumem.alloc {{.*}}, {{.*}} : !pumem.ptr<void, 0>
   %b = memref.alloc() : memref<8xf32>
   memref.dealloc %b : memref<8xf32>
   tt.return

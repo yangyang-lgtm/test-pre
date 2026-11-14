@@ -612,10 +612,21 @@ FailureOr<AccessView> AccessAnalyzer::resolveIterArg(BlockArgument arg)
   auto initExpr = buildValue(init);
   if (failed(initExpr)) return failure();
 
-  ExprPtr iv = ScalarExpr::sym(SymKind::LoopIv, ivId);
+  // The pointer advances once per iteration, so the carried offset is the
+  // number of completed iterations times the increment, not the raw induction
+  // variable times the increment.
+  FailureOr<ExprPtr> lowerExpr = buildScalar(loop.getLowerBound());
+  FailureOr<ExprPtr> stepExpr  = buildScalar(loop.getStep());
+  if (failed(lowerExpr) || failed(stepExpr) || !*lowerExpr || !(*lowerExpr)->isConst() || !*stepExpr ||
+      !(*stepExpr)->isConst() || (*stepExpr)->value <= 0) {
+    deferred_ = DeferredReason::DataDependentOffset;
+    return failure();
+  }
+  ExprPtr iv   = ScalarExpr::sym(SymKind::LoopIv, ivId);
+  ExprPtr trip = ScalarExpr::bin(ScalarExpr::Kind::DivS, ScalarExpr::sub(iv, *lowerExpr), *stepExpr);
   AccessView view;
   view.base   = initExpr->base;
-  view.offset = ScalarExpr::add(initExpr->offset, ScalarExpr::mul(iv, step->offset));
+  view.offset = ScalarExpr::add(initExpr->offset, ScalarExpr::mul(trip, step->offset));
 
   size_t rank = std::max(initExpr->dims.size(), step->dims.size());
   view.dims.resize(rank);
@@ -624,7 +635,7 @@ FailureOr<AccessView> AccessAnalyzer::resolveIterArg(BlockArgument arg)
     AccessDim inc  = i < step->dims.size() ? step->dims[i] : AccessDim{};
     if (base.size && inc.size && base.size != inc.size)
       return emitFailure(loc, "shape mismatch across the loop-carried pointer");
-    view.dims[i].start  = ScalarExpr::add(base.start, ScalarExpr::mul(iv, inc.start));
+    view.dims[i].start  = ScalarExpr::add(base.start, ScalarExpr::mul(trip, inc.start));
     view.dims[i].stride = base.stride + inc.stride;
     view.dims[i].size   = base.size ? base.size : inc.size;
   }

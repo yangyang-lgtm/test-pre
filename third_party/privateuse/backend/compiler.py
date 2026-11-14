@@ -6,8 +6,10 @@ import hashlib
 import functools
 import os
 import re
+import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 
 _EXTERN_C_RE = re.compile(r'extern\s+"C"\s+[\w\s\*&<>:]*?\b(\w+)\s*\(')
@@ -55,6 +57,9 @@ class DeviceInfo:
             "num_pids": options.num_pids,
             "num_blocks": options.num_blocks,
             "block_bytes": options.block_bytes,
+            "launcher_attr": options.launcher_attr,
+            "kernel_attr": options.kernel_attr,
+            "outlined_attr": options.outlined_attr,
         }
         return DeviceInfo(fields, lower)
 
@@ -69,8 +74,9 @@ class DeviceInfo:
 
 def _check_entry_symbol(cpp, kernel_name):
     symbols = _EXTERN_C_RE.findall(cpp)
-    if kernel_name not in symbols:
-        raise RuntimeError(f"privateuse: lowered kernel exports {symbols}, the launcher expects '{kernel_name}'")
+    if kernel_name + "_launcher" not in symbols:
+        raise RuntimeError(f"privateuse: lowered kernel exports {symbols}, "
+                           f"the launcher expects '{kernel_name}_launcher'")
 
 
 def _split_params(text):
@@ -186,11 +192,11 @@ def _fuse_and_bufferize(module):
     return module
 
 
-def _transform(module):
+def _transform(module, device_info):
     pm = ir.pass_manager(module.context)
     pm.enable_debug()
     privateuse.add_linalg_to_runtime_call(pm)
-    privateuse.add_outline_linalg_ops(pm)
+    privateuse.add_outline_linalg_ops(pm, device_info["lower"]["outlined_attr"])
     privateuse.add_lower_linalg_reduce(pm)
     privateuse.add_convert_linalg_to_loops(pm)
     passes.common.add_canonicalizer(pm)
@@ -209,18 +215,43 @@ def _lower_to_pumem(module):
     privateuse.add_memref_expand(pm)
     privateuse.add_memref_to_pumem(pm)
     privateuse.add_sink_constant_call_args(pm)
-    passes.common.add_canonicalizer(pm)
     privateuse.add_arith_to_puarith(pm)
+    passes.common.add_canonicalizer(pm)
+    passes.common.add_cse(pm)
     pm.run(module, 'lower_to_pumem')
     return module
 
 
 def _emit_cpp(module, device_info):
-    raise NotImplementedError("privateuse: no IR to C++ emission yet")
+    lower = device_info["lower"]
+    pm = ir.pass_manager(module.context)
+    pm.enable_debug()
+    privateuse.add_reconcile_unrealized_casts(pm)
+    privateuse.add_to_puc(pm)
+    privateuse.add_puc_localize_carried(pm)
+    privateuse.add_puc_simplify_assign(pm)
+    passes.common.add_cse(pm)
+    privateuse.add_puc_launch(pm, lower["launcher_attr"], lower["kernel_attr"])
+    passes.common.add_canonicalizer(pm)
+    pm.run(module, 'emit_cpp')
+    return privateuse.translate_puc_to_cpp(module, lower["runtime_backend"], lower["num_pids"])
+
+
+def _runtime_dir():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime")
 
 
 def _compile_object(cpp, device_info):
-    raise NotImplementedError("privateuse: no C++ to object compilation yet")
+    runtime_dir = _runtime_dir()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        src_path = os.path.join(tmpdir, "kernel.cpp")
+        so_path = os.path.join(tmpdir, "kernel.so")
+        Path(src_path).write_text(cpp)
+        subprocess.check_call([
+            "g++", "-std=gnu++17", "-O2", "-fPIC", "-shared", f"-I{runtime_dir}", src_path,
+            os.path.join(runtime_dir, "cpu_backend_runtime.cpp"), "-o", so_path
+        ])
+        return Path(so_path).read_bytes()
 
 
 def lower_kernel_ir(kernel_ir, grid, device_info, kernel_name, args):
@@ -228,10 +259,10 @@ def lower_kernel_ir(kernel_ir, grid, device_info, kernel_name, args):
     module = _parse_ir(kernel_ir)
     module = _specialize_ir(module, grid, constants, device_info["lower"]["num_pids"])
     module = _fuse_and_bufferize(module)
-    module = _transform(module)
+    module = _transform(module, device_info)
     module = _lower_to_pumem(module)
-    print(module)
     cpp = _emit_cpp(module, device_info)
+    print(cpp)
     _check_entry_symbol(cpp, kernel_name)
     return _compile_object(cpp, device_info)
 
@@ -258,6 +289,9 @@ class PrivateUseOptions:
     num_pids: int = 32
     num_blocks: int = 5
     block_bytes: int = 1 << 18
+    launcher_attr: str = 'extern "C"'
+    kernel_attr: str = "GLOBAL"
+    outlined_attr: str = "OUTLINED"
 
     def __post_init__(self):
         pass
@@ -310,7 +344,6 @@ class PrivateUseBackend(BaseBackend):
         metadata["name"] = _entry_name(mod)
         metadata["device_info"] = device_info
         metadata["device_digest"] = device_info.digest()
-        print(mod)
         return mod
 
     def add_stages(self, stages, options, language):

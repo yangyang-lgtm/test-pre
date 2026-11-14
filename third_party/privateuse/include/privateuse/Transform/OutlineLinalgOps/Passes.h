@@ -5,11 +5,12 @@
 #include "mlir/Pass/Pass.h"
 
 #include <memory>
+#include <string>
 
 namespace mlir {
 namespace triton {
 
-std::unique_ptr<OperationPass<ModuleOp>> createOutlineLinalgOpsPass();
+std::unique_ptr<OperationPass<ModuleOp>> createOutlineLinalgOpsPass(std::string outlinedAttrValue = "");
 
 #define GEN_PASS_REGISTRATION
 #include "privateuse/Transform/OutlineLinalgOps/Passes.h.inc"

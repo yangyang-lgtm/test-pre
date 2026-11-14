@@ -7,6 +7,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "privateuse/Utils/Constants.h"
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -72,6 +73,8 @@ struct OutlineLinalgOpsPass : public ::impl::OutlineLinalgOpsBase<OutlineLinalgO
 {
   using OutlineLinalgOpsBase::OutlineLinalgOpsBase;
 
+  OutlineLinalgOpsPass(std::string outlinedAttrValue) { this->outlinedAttrValue = std::move(outlinedAttrValue); }
+
   void getDependentDialects(DialectRegistry& registry) const override
   {
     // clang-format off
@@ -112,6 +115,8 @@ struct OutlineLinalgOpsPass : public ::impl::OutlineLinalgOpsBase<OutlineLinalgO
         )
       );
       SymbolTable::setSymbolVisibility(outlined, SymbolTable::Visibility::Private);
+      if (!outlinedAttrValue.empty())
+        outlined->setAttr(triton::kOutlinedAttr, builder.getStringAttr(outlinedAttrValue));
 
       Block* entry = outlined.addEntryBlock();
       builder.setInsertionPointToStart(entry);
@@ -135,7 +140,7 @@ struct OutlineLinalgOpsPass : public ::impl::OutlineLinalgOpsBase<OutlineLinalgO
 
 } // namespace
 
-std::unique_ptr<OperationPass<ModuleOp>> triton::createOutlineLinalgOpsPass()
+std::unique_ptr<OperationPass<ModuleOp>> triton::createOutlineLinalgOpsPass(std::string outlinedAttrValue)
 {
-  return std::make_unique<OutlineLinalgOpsPass>();
+  return std::make_unique<OutlineLinalgOpsPass>(std::move(outlinedAttrValue));
 }

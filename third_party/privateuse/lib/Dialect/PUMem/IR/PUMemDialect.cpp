@@ -13,6 +13,7 @@
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
+#include "privateuse/Utils/Constants.h"
 
 #define GET_DIALECT_DEFS
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.cpp.inc"
@@ -47,10 +48,18 @@ void mlir::pumem::PUMemDialect::initialize()
 
 LogicalResult mlir::pumem::AllocOp::verify()
 {
-  int64_t alignment = getAlignment();
-  if (alignment <= 0 || !llvm::isPowerOf2_64(alignment))
-    return emitOpError("alignment must be a positive power of two");
+  if (!isa<VoidType>(getPtr().getType().getElemType()))
+    return emitOpError("result must be a void pointer (!pumem.ptr<void, ...>), got ") << getPtr().getType();
   return success();
+}
+
+OpFoldResult mlir::pumem::PointCastOp::fold(FoldAdaptor adaptor)
+{
+  if (getPtr().getType() == getResult().getType()) return getPtr();
+  if (auto inner = getPtr().getDefiningOp<PointCastOp>()) {
+    if (inner.getPtr().getType() == getResult().getType()) return inner.getPtr();
+  }
+  return {};
 }
 
 OpFoldResult mlir::pumem::AddPtrOp::fold(FoldAdaptor adaptor)
@@ -115,6 +124,7 @@ ParseResult mlir::pumem::CopyOp::parse(OpAsmParser& parser, OperationState& resu
   if (parser.parseComma() || parseIndexList(parser, "src_strides", srcStrides)) return failure();
   if (parser.parseComma() || parser.parseKeyword("byte_size") || parser.parseOperand(byteSize)) return failure();
   if (parser.parseOptionalAttrDict(result.attributes)) return failure();
+  result.attributes.erase("dir");
 
   Type dstType;
   Type srcType;
@@ -136,6 +146,10 @@ ParseResult mlir::pumem::CopyOp::parse(OpAsmParser& parser, OperationState& resu
     {1, 1, static_cast<int32_t>(sizes.size()), static_cast<int32_t>(dstStrides.size()),
      static_cast<int32_t>(srcStrides.size()), 1}
   );
+  bool dstDram    = cast<PtrType>(result.operands[0].getType()).getSpace() == triton::kDramSpace;
+  bool srcDram    = cast<PtrType>(result.operands[1].getType()).getSpace() == triton::kDramSpace;
+  const char* dir = dstDram ? (srcDram ? "dram_to_dram" : "sram_to_dram") : (srcDram ? "dram_to_sram" : "sram_to_sram");
+  result.addAttribute("dir", builder.getStringAttr(dir));
   return success();
 }
 
@@ -158,6 +172,17 @@ LogicalResult mlir::pumem::CopyOp::verify()
     return emitOpError("sizes, dst_strides and src_strides must have the same length");
   if (getDst().getType().getElemType() != getSrc().getType().getElemType())
     return emitOpError("source and destination element types must match");
+  StringRef dir = getDir();
+  if (dir != "dram_to_sram" && dir != "sram_to_dram" && dir != "sram_to_sram" && dir != "dram_to_dram")
+    return emitOpError() << "dir must be one of \"dram_to_sram\", \"sram_to_dram\", \"sram_to_sram\", "
+                            "\"dram_to_dram\", got \""
+                         << dir << "\"";
+  bool dstDram = getDst().getType().getSpace() == triton::kDramSpace;
+  bool srcDram = getSrc().getType().getSpace() == triton::kDramSpace;
+  StringRef expect =
+    dstDram ? (srcDram ? "dram_to_dram" : "sram_to_dram") : (srcDram ? "dram_to_sram" : "sram_to_sram");
+  if (dir != expect)
+    return emitOpError() << "dir \"" << dir << "\" does not match the operand spaces (expected \"" << expect << "\")";
   return success();
 }
 

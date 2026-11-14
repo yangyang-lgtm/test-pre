@@ -26,6 +26,15 @@ class PUMEM_Type<string name, string typeMnemonic, list<Trait> traits = []> :
   let mnemonic = typeMnemonic;
 }
 
+def PUMem_VoidType : PUMEM_Type<"Void", "void"> {
+  let summary = "PUM void (untyped) type";
+
+  let description = [{
+    The element type of a `void` pointer, e.g. the result of
+    `pumem.alloc` is `!pumem.ptr<void, 128>`.
+  }];
+}
+
 def PUMem_PtrType : PUMEM_Type<"Ptr", "ptr"> {
   let summary = "A pointer into a PUM memory space";
 
@@ -34,10 +43,43 @@ def PUMem_PtrType : PUMEM_Type<"Ptr", "ptr"> {
     scalars: all memory that the backend can address, including buffers that
     used to be memrefs, is represented as a (pointer, offset) pair.
 
+    A `void` pointer (untyped pointer) uses `!pumem.void` as the element
+    type and is spelled with the `void` keyword, e.g.
+    `!pumem.ptr<void, 128>`.
+
     Example: !pumem.ptr<f32, 128>
   }];
   let parameters = (ins "Type":$elemType, "int64_t":$space);
-  let assemblyFormat = "`<` $elemType `,` $space `>`";
+
+  let hasCustomAssemblyFormat = 1;
+
+  code extraClassDefinition = [{
+    ::mlir::Type $cppClass::parse(::mlir::AsmParser &parser) {
+      if (parser.parseLess())
+        return {};
+      ::mlir::Type elemType;
+      if (::mlir::succeeded(parser.parseOptionalKeyword("void"))) {
+        elemType = VoidType::get(parser.getContext());
+      } else if (parser.parseType(elemType)) {
+        return {};
+      }
+      int64_t space = 0;
+      if (parser.parseComma() || parser.parseInteger(space) ||
+          parser.parseGreater())
+        return {};
+      return $cppClass::get(parser.getContext(), elemType, space);
+    }
+
+    void $cppClass::print(::mlir::AsmPrinter &printer) const {
+      printer << "<";
+      if (::mlir::isa<VoidType>(getElemType())) {
+        printer << "void";
+      } else {
+        printer.printStrippedAttrOrType(getElemType());
+      }
+      printer << ", " << getSpace() << ">";
+    }
+  }];
 }
 
 def PUMem_Ptr : Type<CPred<"::llvm::isa<::mlir::pumem::PtrType>($_self)">,
@@ -61,22 +103,34 @@ def PUMem_AllocOp : PUMEM_Op<"alloc"> {
   let summary = "Allocate a runtime buffer";
 
   let description = [{
-    Allocates `bytes` bytes in the memory space encoded in the result pointer
-    type and returns a pointer to the first byte. `alignment` is a power of
-    two. Every allocation is owned by the op that performs it: `pumem.dealloc`
-    must only be handed a pointer that comes straight from `pumem.alloc`.
+    Allocates `bytes` bytes, aligned to `align` (a power of two), in the
+    memory space encoded in the result pointer type and returns a `void`
+    pointer to the first byte. Use `pumem.point_cast` to turn it into a typed
+    pointer. Every allocation is owned by the op that performs it:
+    `pumem.dealloc` must only be handed a pointer that comes straight from
+    `pumem.alloc`.
 
-    Example: %buf = pumem.alloc %bytes {alignment = 64 : i64} : !pumem.ptr<f32, 128>
+    Example: %buf = pumem.alloc %bytes, %align : !pumem.ptr<void, 128>
   }];
-  let arguments = (ins Index:$bytes, I64Attr:$alignment);
+  let arguments = (ins Index:$bytes, Index:$align);
   let results = (outs PUMem_Ptr:$ptr);
-  let assemblyFormat = "$bytes attr-dict `:` qualified(type($ptr))";
-  let builders = [OpBuilder<(ins "Type":$resultType, "Value":$bytes, "int64_t":$alignment), [{
-    $_state.addTypes(resultType);
-    $_state.addOperands(bytes);
-    $_state.addAttribute("alignment", $_builder.getI64IntegerAttr(alignment));
-  }]>];
+  let assemblyFormat = "$bytes `,` $align attr-dict `:` qualified(type($ptr))";
   let hasVerifier = 1;
+}
+
+def PUMem_PointCastOp : PUMEM_Op<"point_cast", [Pure]> {
+  let summary = "Cast a PUM void pointer to a typed pointer";
+
+  let description = [{
+    Reinterprets a `void` pointer produced by `pumem.alloc` as a pointer to
+    elements of the target element type in the target memory space.
+
+    Example: %f = pumem.point_cast %p : !pumem.ptr<void, 128> -> !pumem.ptr<f32, 128>
+  }];
+  let arguments = (ins PUMem_Ptr:$ptr);
+  let results = (outs PUMem_Ptr:$result);
+  let assemblyFormat = "$ptr attr-dict `:` qualified(type($ptr)) `->` qualified(type($result))";
+  let hasFolder = 1;
 }
 
 def PUMem_DeallocOp : PUMEM_Op<"dealloc"> {
@@ -150,13 +204,30 @@ def PUMem_CopyOp : PUMEM_Op<"copy", [AttrSizedOperandSegments]> {
       pumem.copy %dst, %src, sizes = (%n, %m), dst_strides = (%m, %c1),
                  src_strides = (%m, %c1), byte_size %c4
                  : !pumem.ptr<f32, 128>, !pumem.ptr<f32, 0>
+
+    The `dir` attribute records the copy direction relative to the memory
+    spaces ("dram_to_sram" / "sram_to_dram" / "sram_to_sram" /
+    "dram_to_dram"; space 0 is DRAM, any other space is SRAM). It is derived
+    automatically from the operand spaces, so callers never pass it.
   }];
   let arguments = (ins Arg<PUMem_Ptr, "destination buffer", [MemWrite]>:$dst,
                        Arg<PUMem_Ptr, "source buffer", [MemRead]>:$src,
                        Variadic<Index>:$sizes,
                        Variadic<Index>:$dst_strides,
                        Variadic<Index>:$src_strides,
-                       Index:$byte_size);
+                       Index:$byte_size,
+                       StrAttr:$dir);
+  let builders = [
+    OpBuilder<(ins "Value":$dst, "Value":$src, "ValueRange":$sizes,
+                   "ValueRange":$dstStrides, "ValueRange":$srcStrides, "Value":$byteSize),
+    [{
+      auto dstDram = ::mlir::cast<::mlir::pumem::PtrType>(dst.getType()).getSpace() == ::mlir::triton::kDramSpace;
+      auto srcDram = ::mlir::cast<::mlir::pumem::PtrType>(src.getType()).getSpace() == ::mlir::triton::kDramSpace;
+      const char* dir =
+        dstDram ? (srcDram ? "dram_to_dram" : "sram_to_dram") : (srcDram ? "dram_to_sram" : "sram_to_sram");
+      build($_builder, $_state, dst, src, sizes, dstStrides, srcStrides, byteSize, dir);
+    }]>
+  ];
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
 }

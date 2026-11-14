@@ -1,4 +1,6 @@
 // RUN: privateuse-opt %s -privateuse-outline-linalg-ops | FileCheck %s
+// RUN: privateuse-opt %s -privateuse-outline-linalg-ops="outlined-attr-value=OUTLINED" \
+// RUN:   | FileCheck %s --check-prefix=ATTR
 // RUN: privateuse-opt %s -privateuse-outline-linalg-ops -privateuse-lower-linalg-reduce \
 // RUN:   -convert-linalg-to-loops -privateuse-memref-to-pumem \
 // RUN:   | FileCheck %s --check-prefix=PUMEM --implicit-check-not=memref.
@@ -24,6 +26,16 @@
 // CHECK:       linalg.fill ins(%[[VALUE]] : f32) outs(%[[OUT]] : memref<16xf32>)
 // CHECK:       return
 
+// With a marker value the outlined functions carry it, while the kernel that
+// stays behind does not.
+
+// ATTR-LABEL: func.func private @outlined_linalg_generic_addf_1(
+// ATTR-SAME:  %{{.*}}: memref<16xf32>, %{{.*}}: memref<16xf32>) attributes {pumem.outlined = "OUTLINED"}
+// ATTR-LABEL: func.func private @outlined_linalg_fill_0(
+// ATTR-SAME:  %{{.*}}: f32, %{{.*}}: memref<16xf32>) attributes {pumem.outlined = "OUTLINED"}
+// ATTR-LABEL: func.func @kernel(
+// ATTR-NOT:   pumem.outlined
+
 func.func @kernel(%a: memref<16xf32>, %b: memref<16xf32>) {
   // CHECK-LABEL: func.func @kernel(
   // CHECK-NOT:   linalg.
@@ -41,18 +53,21 @@ func.func @kernel(%a: memref<16xf32>, %b: memref<16xf32>) {
 }
 
 // After the memref to pumem conversion the outlined signatures and the calls
-// carry the scalar tuple ABI as well.
+// carry the scalar tuple ABI as well. The static memref sizes are folded into
+// the body, so outlined functions only keep the descriptor components they
+// still read.
 
 // PUMEM-LABEL: func.func private @outlined_linalg_generic_addf_1(
 // PUMEM-SAME:  %[[IN:[a-zA-Z0-9_]+]]: !pumem.ptr<f32, 0>
-// PUMEM-SAME:  , %{{[a-zA-Z0-9_]+}}: index, %{{[a-zA-Z0-9_]+}}: index, %{{[a-zA-Z0-9_]+}}: index, %[[OUT:[a-zA-Z0-9_]+]]: !pumem.ptr<f32, 0>
+// PUMEM-SAME:  , %{{[a-zA-Z0-9_]+}}: index, %{{[a-zA-Z0-9_]+}}: index, %[[OUT:[a-zA-Z0-9_]+]]: !pumem.ptr<f32, 0>
+// PUMEM-SAME:  , %{{[a-zA-Z0-9_]+}}: index, %{{[a-zA-Z0-9_]+}}: index) {
 // PUMEM-NOT:   memref.
 //
 // PUMEM-LABEL: func.func private @outlined_linalg_fill_0(
 // PUMEM-SAME:  %[[VALUE:[a-zA-Z0-9_]+]]: f32
-// PUMEM-SAME:  , %[[BUF:[a-zA-Z0-9_]+]]: !pumem.ptr<f32, 0>, %{{[a-zA-Z0-9_]+}}: index, %{{[a-zA-Z0-9_]+}}: index, %{{[a-zA-Z0-9_]+}}: index) {
+// PUMEM-SAME:  , %[[BUF:[a-zA-Z0-9_]+]]: !pumem.ptr<f32, 0>, %{{[a-zA-Z0-9_]+}}: index, %{{[a-zA-Z0-9_]+}}: index) {
 // PUMEM-NOT:   memref.
 //
 // PUMEM-LABEL: func.func @kernel(
-// PUMEM:       call @outlined_linalg_fill_0({{.*}}) : (f32, !pumem.ptr<f32, 0>, index, index, index) -> ()
-// PUMEM:       call @outlined_linalg_generic_addf_1({{.*}}) : (!pumem.ptr<f32, 0>, index, index, index, !pumem.ptr<f32, 0>, index, index, index) -> ()
+// PUMEM:       call @outlined_linalg_fill_0({{.*}}) : (f32, !pumem.ptr<f32, 0>, index, index) -> ()
+// PUMEM:       call @outlined_linalg_generic_addf_1({{.*}}) : (!pumem.ptr<f32, 0>, index, index, !pumem.ptr<f32, 0>, index, index) -> ()
