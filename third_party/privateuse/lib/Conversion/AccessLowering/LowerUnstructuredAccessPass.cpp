@@ -299,7 +299,7 @@ private:
     Value buf       = memref::AllocOp::create(
       builder, loc, sramBufferType(tensorType, builder), builder.getI64IntegerAttr(kDefaultAlignment)
     );
-    pumem::GatherOp::create(builder, loc, baseToken, indices, buf, mask, other);
+    pumem::TileGatherOp::create(builder, loc, baseToken, indices, buf, mask, other);
 
     Value tensor =
       bufferization::ToTensorOp::create(builder, loc, tensorType, buf, /*restrict=*/true, /*writable=*/true);
@@ -322,7 +322,7 @@ private:
     );
     Value baseToken = materializeBase(chain, pointee, builder, loc);
     Value indices   = materializeIndices(chain, tensorType, builder, loc);
-    pumem::ScatterOp::create(builder, loc, buf, indices, baseToken, mask);
+    pumem::TileScatterOp::create(builder, loc, buf, indices, baseToken, mask);
     store->erase();
     return success();
   }

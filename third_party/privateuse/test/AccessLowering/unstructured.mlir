@@ -18,8 +18,8 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     %q = tt.addptr %qS, %m : tensor<4x!tt.ptr<f32>>, tensor<4xi32>
     tt.store %q, %v : tensor<4x!tt.ptr<f32>>
     tt.return
-    // CHECK: pumem.gather {{.*}} : memref<?xf32>, memref<4xi32, 128>, memref<4xf32, 128>
-    // CHECK: pumem.scatter {{.*}} : memref<4xf32, 128>, memref<4xi32, 128>, memref<?xf32>
+    // CHECK: pumem.tile_gather {{.*}} : memref<?xf32>, memref<4xi32, 128>, memref<4xf32, 128>
+    // CHECK: pumem.tile_scatter {{.*}} : memref<4xf32, 128>, memref<4xi32, 128>, memref<?xf32>
   }
 
   tt.func @scatter_overlap(%dst: !tt.ptr<f32>) {
@@ -38,7 +38,7 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     tt.store %d, %v : tensor<2x2x!tt.ptr<f32>>
     tt.return
     // CHECK: bufferization.to_buffer {{.*}} : tensor<2x2xi32> to memref<2x2xi32, 128>
-    // CHECK: pumem.scatter {{.*}} : memref<2x2xf32, 128>, memref<2x2xi32, 128>, memref<?xf32>
+    // CHECK: pumem.tile_scatter {{.*}} : memref<2x2xf32, 128>, memref<2x2xi32, 128>, memref<?xf32>
   }
 
   tt.func @broadcast_ptr(%src: !tt.ptr<f32>, %dst: !tt.ptr<f32>, %map: !tt.ptr<i32>) {
@@ -56,8 +56,8 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     tt.store %pb, %v : tensor<2x4x!tt.ptr<f32>>
     tt.return
     // CHECK: bufferization.to_buffer {{.*}} : tensor<2x4xi32> to memref<2x4xi32, 128>
-    // CHECK: pumem.gather {{.*}} : memref<?xf32>, memref<2x4xi32, 128>, memref<2x4xf32, 128>
-    // CHECK: pumem.scatter {{.*}} : memref<2x4xf32, 128>, memref<2x4xi32, 128>, memref<?xf32>
+    // CHECK: pumem.tile_gather {{.*}} : memref<?xf32>, memref<2x4xi32, 128>, memref<2x4xf32, 128>
+    // CHECK: pumem.tile_scatter {{.*}} : memref<2x4xf32, 128>, memref<2x4xi32, 128>, memref<?xf32>
   }
 
   tt.func @wide_offset(%src: !tt.ptr<f32>, %map: !tt.ptr<i64>) {
@@ -72,8 +72,8 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     %v = tt.load %p : tensor<4x!tt.ptr<f32>>
     tt.store %p, %v : tensor<4x!tt.ptr<f32>>
     tt.return
-    // CHECK: pumem.gather {{.*}} : memref<?xf32>, memref<4xi64, 128>, memref<4xf32, 128>
-    // CHECK: pumem.scatter {{.*}} : memref<4xf32, 128>, memref<4xi64, 128>, memref<?xf32>
+    // CHECK: pumem.tile_gather {{.*}} : memref<?xf32>, memref<4xi64, 128>, memref<4xf32, 128>
+    // CHECK: pumem.tile_scatter {{.*}} : memref<4xf32, 128>, memref<4xi64, 128>, memref<?xf32>
   }
 
   tt.func @splat_store(%dst: !tt.ptr<f32>) {
@@ -85,7 +85,7 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     tt.store %dS, %v : tensor<4x!tt.ptr<f32>>
     tt.return
     // CHECK: bufferization.to_buffer {{.*}} : tensor<4xi32> to memref<4xi32, 128>
-    // CHECK: pumem.scatter {{.*}} : memref<4xf32, 128>, memref<4xi32, 128>, memref<?xf32>
+    // CHECK: pumem.tile_scatter {{.*}} : memref<4xf32, 128>, memref<4xi32, 128>, memref<?xf32>
   }
 
   tt.func @mixed_width(%src: !tt.ptr<f32>, %map32: !tt.ptr<i32>, %map64: !tt.ptr<i64>) {
@@ -106,8 +106,8 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     tt.return
     // CHECK: linalg.generic {{.*}} ins(%{{.*}} : tensor<4xi32>) outs(%{{.*}} : tensor<4xi64>)
     // CHECK: bufferization.to_buffer {{.*}} : tensor<4xi64> to memref<4xi64, 128>
-    // CHECK: pumem.gather {{.*}} : memref<?xf32>, memref<4xi64, 128>, memref<4xf32, 128>
-    // CHECK: pumem.scatter {{.*}} : memref<4xf32, 128>, memref<4xi64, 128>, memref<?xf32>
+    // CHECK: pumem.tile_gather {{.*}} : memref<?xf32>, memref<4xi64, 128>, memref<4xf32, 128>
+    // CHECK: pumem.tile_scatter {{.*}} : memref<4xf32, 128>, memref<4xi64, 128>, memref<?xf32>
   }
 
   tt.func @bool_chain(%src: !tt.ptr<i1>, %dst: !tt.ptr<i1>, %map: !tt.ptr<i32>) {
@@ -126,8 +126,8 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     %qb = tt.bitcast %q : tensor<4x!tt.ptr<i1>> -> tensor<4x!tt.ptr<i8>>
     tt.store %qb, %v : tensor<4x!tt.ptr<i8>>
     tt.return
-    // CHECK: pumem.gather {{.*}} : memref<?xi8>, memref<4xi32, 128>, memref<4xi8, 128>
-    // CHECK: pumem.scatter {{.*}} : memref<4xi8, 128>, memref<4xi32, 128>, memref<?xi8>
+    // CHECK: pumem.tile_gather {{.*}} : memref<?xi8>, memref<4xi32, 128>, memref<4xi8, 128>
+    // CHECK: pumem.tile_scatter {{.*}} : memref<4xi8, 128>, memref<4xi32, 128>, memref<?xi8>
   }
 
   tt.func @masked_flip(%src: !tt.ptr<f32>, %dst: !tt.ptr<f32>) {
@@ -150,7 +150,7 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     %q = tt.addptr %qS, %r : tensor<256x!tt.ptr<f32>>, tensor<256xi32>
     tt.store %q, %v : tensor<256x!tt.ptr<f32>>
     tt.return
-    // CHECK: pumem.gather {{.*}} : memref<?xf32>, memref<256xi32, 128>, memref<256xf32, 128>, memref<256xi1, 128>, f32
+    // CHECK: pumem.tile_gather {{.*}} : memref<?xf32>, memref<256xi32, 128>, memref<256xf32, 128>, memref<256xi1, 128>, f32
   }
 
   tt.func @masked_scatter(%dst: !tt.ptr<f32>) {
@@ -169,7 +169,7 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     %d = tt.addptr %dS, %rev : tensor<256x!tt.ptr<f32>>, tensor<256xi32>
     tt.store %d, %v, %mask : tensor<256x!tt.ptr<f32>>
     tt.return
-    // CHECK: pumem.scatter {{.*}} : memref<256xf32, 128>, memref<256xi32, 128>, memref<?xf32>, memref<256xi1, 128>
+    // CHECK: pumem.tile_scatter {{.*}} : memref<256xf32, 128>, memref<256xi32, 128>, memref<?xf32>, memref<256xi1, 128>
   }
 
   tt.func @scalar_offset_chain(%src: !tt.ptr<f32>, %map: !tt.ptr<i32>, %off: i32) {
@@ -186,8 +186,8 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     tt.store %p, %v : tensor<4x!tt.ptr<f32>>
     tt.return
     // CHECK: linalg.fill ins(%{{.*}} : i32) outs(%{{.*}} : tensor<4xi32>)
-    // CHECK: pumem.gather {{.*}} : memref<?xf32>, memref<4xi32, 128>, memref<4xf32, 128>
-    // CHECK: pumem.scatter {{.*}} : memref<4xf32, 128>, memref<4xi32, 128>, memref<?xf32>
+    // CHECK: pumem.tile_gather {{.*}} : memref<?xf32>, memref<4xi32, 128>, memref<4xf32, 128>
+    // CHECK: pumem.tile_scatter {{.*}} : memref<4xf32, 128>, memref<4xi32, 128>, memref<?xf32>
   }
 
   tt.func @bool_scalar_bitcast(%src: !tt.ptr<i1>, %dst: !tt.ptr<i1>) {
@@ -210,7 +210,7 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     %qb = tt.bitcast %q : tensor<256x!tt.ptr<i1>> -> tensor<256x!tt.ptr<i8>>
     tt.store %qb, %v : tensor<256x!tt.ptr<i8>>
     tt.return
-    // CHECK: pumem.gather {{.*}} : memref<?xi8>, memref<256xi32, 128>, memref<256xi8, 128>, memref<256xi1, 128>, i8
+    // CHECK: pumem.tile_gather {{.*}} : memref<?xi8>, memref<256xi32, 128>, memref<256xi8, 128>, memref<256xi1, 128>, i8
   }
 
   tt.func @coupled_mask(%src: !tt.ptr<f32>) {
@@ -232,7 +232,7 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
     %v = tt.load %a, %mask : tensor<8x8x!tt.ptr<f32>>
     tt.store %a, %v, %mask : tensor<8x8x!tt.ptr<f32>>
     tt.return
-    // CHECK: pumem.gather {{.*}} : memref<?xf32>, memref<8x8xi32, 128>, memref<8x8xf32, 128>, memref<8x8xi1, 128>, f32
-    // CHECK: pumem.scatter {{.*}} : memref<8x8xf32, 128>, memref<8x8xi32, 128>, memref<?xf32>, memref<8x8xi1, 128>
+    // CHECK: pumem.tile_gather {{.*}} : memref<?xf32>, memref<8x8xi32, 128>, memref<8x8xf32, 128>, memref<8x8xi1, 128>, f32
+    // CHECK: pumem.tile_scatter {{.*}} : memref<8x8xf32, 128>, memref<8x8xi32, 128>, memref<?xf32>, memref<8x8xi1, 128>
   }
 }

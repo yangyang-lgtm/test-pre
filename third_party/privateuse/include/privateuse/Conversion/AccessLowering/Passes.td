@@ -40,8 +40,8 @@ def LowerUnstructuredAccess : Pass<"privateuse-lower-unstructured-access", "mlir
       address chain stays untouched;
     * the accumulated element offsets are materialized into an offset buffer
       that keeps the integer element type of the offsets;
-    * loads become pumem.gather through a local tile buffer, stores become
-      pumem.scatter from a local tile buffer;
+    * loads become pumem.tile_gather through a local tile buffer, stores
+      become pumem.tile_scatter from a local tile buffer;
     * functions with at least one lowered access are tagged so that
       -privateuse-ptr-to-memref can rewrite their signatures afterwards.
 

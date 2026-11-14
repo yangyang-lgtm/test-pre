@@ -43,13 +43,13 @@ module attributes {privateuse.grid = array<i64: 4, 3, 1>} {
 // CHECK-DAG: memref.copy
 // CHECK-DAG: memref.copy
 // CHECK: bufferization.to_buffer {{.*}} : tensor<8xi1> to memref<8xi1, 128>
-// CHECK: pumem.gather {{.*}} : memref<?xf32>, memref<8xi32, 128>, memref<8xf32, 128>, memref<8xi1, 128>, f32
-// CHECK: pumem.scatter {{.*}} : memref<8xf32, 128>, memref<8xi32, 128>, memref<?xf32>, memref<8xi1, 128>
+// CHECK: pumem.tile_gather {{.*}} : memref<?xf32>, memref<8xi32, 128>, memref<8xf32, 128>, memref<8xi1, 128>, f32
+// CHECK: pumem.tile_scatter {{.*}} : memref<8xf32, 128>, memref<8xi32, 128>, memref<?xf32>, memref<8xi1, 128>
 // CHECK: tt.return
 
 // CHECK-LABEL: tt.func @bool_masked(
 // CHECK-SAME: %arg0: memref<?xi8>, %arg1: memref<?xi8>
 // CHECK: memref.reinterpret_cast %arg0 to offset: [0], sizes: [8], strides: [1] : memref<?xi8> to memref<8xi8, strided<[1]>>
 // CHECK: memref.copy
-// CHECK: pumem.scatter {{.*}} : memref<8xi8, 128>, memref<8xi32, 128>, memref<?xi8>, memref<8xi1, 128>
+// CHECK: pumem.tile_scatter {{.*}} : memref<8xi8, 128>, memref<8xi32, 128>, memref<?xi8>, memref<8xi1, 128>
 // CHECK: tt.return

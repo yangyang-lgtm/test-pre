@@ -8,6 +8,9 @@
 
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h.inc"
 
+#define GET_TYPEDEF_CLASSES
+#include "privateuse/Dialect/PUMem/IR/PUMemTypes.h.inc"
+
 #define GET_OP_CLASSES
 #include "privateuse/Dialect/PUMem/IR/PUMemOps.h.inc"
 
