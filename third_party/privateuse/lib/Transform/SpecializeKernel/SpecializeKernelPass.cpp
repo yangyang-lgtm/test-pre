@@ -55,7 +55,7 @@ private:
 
     for (const SpecializeConstant& constant : constants) {
       int64_t index = constant.first;
-      if (index < 0 || index >= static_cast<int64_t>(body.getNumArguments()))
+      if (index < 0 || index >= body.getNumArguments())
         return func.emitError("specialize: constant index ") << index << " is out of range";
       if (erased.test(index)) return func.emitError("specialize: duplicate constant index ") << index;
 
@@ -111,7 +111,7 @@ private:
     OpBuilder builder(func.getContext());
     for (triton::GetNumProgramsOp op : ops) {
       int64_t axis = static_cast<int64_t>(op.getAxis());
-      if (axis < 0 || axis >= static_cast<int64_t>(grid.size()))
+      if (axis < 0 || axis >= grid.size())
         return op.emitError("specialize: program id axis out of range");
 
       builder.setInsertionPoint(op);

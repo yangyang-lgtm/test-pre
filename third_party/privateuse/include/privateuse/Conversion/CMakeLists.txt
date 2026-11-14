@@ -1,3 +1,4 @@
 add_subdirectory(AccessLowering)
 add_subdirectory(ArithToLinalg)
 add_subdirectory(Bufferize)
+add_subdirectory(MemrefToPumem)

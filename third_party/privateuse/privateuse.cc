@@ -1,8 +1,12 @@
 #include "privateuse/Conversion/AccessLowering/Passes.h"
 #include "privateuse/Conversion/ArithToLinalg/Passes.h"
 #include "privateuse/Conversion/Bufferize/Passes.h"
+#include "privateuse/Conversion/MemrefToPumem/Passes.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
+#include "privateuse/Transform/LowerLinalgReduce/Passes.h"
+#include "privateuse/Transform/OutlineLinalgOps/Passes.h"
 #include "privateuse/Transform/PidLoop/Passes.h"
+#include "privateuse/Transform/SinkConstantCallArgs/Passes.h"
 #include "privateuse/Transform/SpecializeKernel/SpecializeKernel.h"
 #include "privateuse/Utils/AccessAnalysis/Passes.h"
 
@@ -17,9 +21,11 @@
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -114,5 +120,32 @@ void init_triton_privateuse(py::module_& m)
 
   m.def("add_arith_to_linalg", [](PassManager& pm) { pm.addPass(triton::createArithToLinalgPass()); }, py::arg("pm"));
 
+  m.def(
+    "add_outline_linalg_ops", [](PassManager& pm) { pm.addPass(triton::createOutlineLinalgOpsPass()); }, py::arg("pm")
+  );
+
+  m.def(
+    "add_lower_linalg_reduce", [](PassManager& pm) { pm.addPass(triton::createLowerLinalgReducePass()); }, py::arg("pm")
+  );
+
+  m.def(
+    "add_convert_linalg_to_loops", [](PassManager& pm) { pm.addPass(mlir::createConvertLinalgToLoopsPass()); },
+    py::arg("pm")
+  );
+
+  m.def(
+    "add_sink_constant_call_args", [](PassManager& pm) { pm.addPass(triton::createSinkConstantCallArgsPass()); },
+    py::arg("pm")
+  );
+
   m.def("add_bufferize", [](PassManager& pm) { pm.addPass(triton::createBufferizePass()); }, py::arg("pm"));
+
+  m.def(
+    "add_expand_strided_metadata", [](PassManager& pm) { pm.addPass(memref::createExpandStridedMetadataPass()); },
+    py::arg("pm")
+  );
+
+  m.def("add_memref_expand", [](PassManager& pm) { pm.addPass(memref::createExpandOpsPass()); }, py::arg("pm"));
+
+  m.def("add_memref_to_pumem", [](PassManager& pm) { pm.addPass(triton::createMemrefToPumemPass()); }, py::arg("pm"));
 }

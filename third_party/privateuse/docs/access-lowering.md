@@ -19,7 +19,7 @@ passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
 pm.add_pass(passes.common.add_canonicalizer(pm))
 privateuse.add_analyze_access(pm)          # 只诊断，不改 IR
 privateuse.add_lower_structured_access(pm) # 本 pass：规整访问 → memref.copy
-privateuse.add_lower_unstructured_access(pm) # 本 pass：逐元素访问 → pumem.gather/scatter
+privateuse.add_lower_unstructured_access(pm) # 本 pass：逐元素访问 → pumem.tile_gather/tile_scatter
 privateuse.add_ptr_to_memref(pm)          # 收尾：函数签名/地址链 → memref
 ```
 
@@ -50,7 +50,7 @@ ptr[i0, i1, ...] = base + offset + Σ_d (start_d + stride_d * i_d)
 | | 结构化（structured） | 非结构化（unstructured） |
 |---|---|---|
 | 适用条件 | 规范形存在、mask 可证明或为盒形窗口、写地址单射（或窗口单射） | 地址链可分解为 `base + 逐元素索引张量` |
-| 生成 IR | `memref.reinterpret_cast` + `memref.copy`（± `linalg.fill`/`memref.subview`） | `pumem.gather` / `pumem.scatter` |
+| 生成 IR | `memref.reinterpret_cast` + `memref.copy`（± `linalg.fill`/`memref.subview`） | `pumem.tile_gather` / `pumem.tile_scatter` |
 | 性能假设 | 访存是连续/跨步的"整块"搬运，可向量化 | 下标任意，逐元素处理 |
 | 失败策略 | 跳过该 op（软失败），留给 unstructured | 硬报错（lower-or-error）：无法降级即 `emitError` + `signalPassFailure`，成功结束后无 `tt.load`/`tt.store` 残留；白名单门只放行 `tt.load`/`tt.store`，descriptor/atomic 一律报错 |
 
@@ -74,7 +74,7 @@ memref.copy %view, %buf
 %base  = unrealized_conversion_cast %arg to memref<?xT>
 %idx   = bufferization.to_buffer %offsets_tensor : tensor<...xI> to memref<...xI, 128>
 %buf   = memref.alloc() {alignment = 64} : memref<...xT, 128>
-pumem.gather %base, %idx, %buf [, %mask [, %other]] : ...
+pumem.tile_gather %base, %idx, %buf [, %mask [, %other]] : ...
 %tensor = bufferization.to_tensor %buf restrict writable : memref<...xT, 128>
 ```
 
@@ -376,8 +376,8 @@ Value createBufferWindow(OpBuilder&, Location, Value buf,
 ### 2.6 `PUMem` dialect 的 Gather / Scatter
 
 ```mlir
-pumem.gather   %source, %indices, %destination [, %mask [, %other]]
-pumem.scatter  %source, %indices, %destination [, %mask]
+pumem.tile_gather   %source, %indices, %destination [, %mask [, %other]]
+pumem.tile_scatter  %source, %indices, %destination [, %mask]
 ```
 
 - `gather`：`destination[i] = mask[i] ? source[indices[i]] : other`。
@@ -391,6 +391,26 @@ pumem.scatter  %source, %indices, %destination [, %mask]
 - verifier 保证：`source`/`destination` rank-1、indices 为整型、shape
   与 tile 对齐、元素类型一致、mask 为 i1 且 shape 匹配、`other` 必须
   伴随 mask 且类型与元素类型一致。
+
+`-privateuse-memref-to-pumem` 再把这两个 memref 形态的 op 换成扁平
+ABI 的 `pumem.gather` / `pumem.scatter`：每个 buffer 拆成
+`(ptr, offset, sizes..., strides...)` 标量元组，offset 在 lowering 时用
+`pumem.addptr` 折进指针，op 只接收指针。扁平 buffer（gather 的
+source、scatter 的 destination）只携带 ptr 与 stride；tile buffer
+共享同一组 `sizes`（indices/destination 或 source/indices 的 shape），
+各带一组 stride；mask 只携带 ptr 与 strides：
+
+```mlir
+pumem.gather %src, %src_stride, %idx, %dst,
+             sizes = (...), indices_strides = (...), destination_strides = (...)
+             [, mask = %mask, mask_strides = (...)] [, other %v]
+             : !pumem.ptr<T, 0>, !pumem.ptr<I, 128>, !pumem.ptr<T, 128> [, !pumem.ptr<i1, 128>] [, T]
+
+pumem.scatter %src, %idx, %dst, %dst_stride,
+              sizes = (...), source_strides = (...), indices_strides = (...)
+              [, mask = %mask, mask_strides = (...)]
+              : !pumem.ptr<T, 128>, !pumem.ptr<I, 128>, !pumem.ptr<T, 0> [, !pumem.ptr<i1, 128>]
+```
 
 ### 2.7 Pass 基础设施
 
@@ -1310,7 +1330,7 @@ LogicalResult lowerLoad(LoadOp load, const PointerChain& chain, bool masked, Typ
   Value indices   = materializeIndices(chain, tensorType, builder, loc);
   Value buf       = memref::AllocOp::create(
     builder, loc, sramBufferType(tensorType, builder), builder.getI64IntegerAttr(kDefaultAlignment));
-  pumem::GatherOp::create(builder, loc, baseToken, indices, buf, mask, other);
+  pumem::TileGatherOp::create(builder, loc, baseToken, indices, buf, mask, other);
 
   Value tensor = bufferization::ToTensorOp::create(builder, loc, tensorType, buf,
                                                    /*restrict=*/true, /*writable=*/true);
@@ -1323,7 +1343,7 @@ LogicalResult lowerLoad(LoadOp load, const PointerChain& chain, bool masked, Typ
 - masked 时：mask buffer + `other` 标量。`other` 的取值规则复用
   `maskedFillValue`（缺省 0、必须是 splat）——与结构化 load 的 fill
   完全一致，保证两条路径语义相同。
-- `pumem.gather` 的参数顺序是 `(source, indices, destination, mask?, other?)`：
+- `pumem.tile_gather` 的参数顺序是 `(source, indices, destination, mask?, other?)`：
   source 为 `memref<?xT>` 基址 token，indices/destination 同 shape，
   destination 是 128 空间的 tile。
 - 无 mask 时 `mask/other` 为空 Value，builder 自动构造可选段
@@ -1346,7 +1366,7 @@ LogicalResult lowerStore(StoreOp store, const PointerChain& chain, bool masked, 
     builder, loc, sramBufferType(tensorType, builder), store.getValue(), /*read_only=*/true);
   Value baseToken = materializeBase(chain, pointee, builder, loc);
   Value indices   = materializeIndices(chain, tensorType, builder, loc);
-  pumem::ScatterOp::create(builder, loc, buf, indices, baseToken, mask);
+  pumem::TileScatterOp::create(builder, loc, buf, indices, baseToken, mask);
   store->erase();
   return success();
 }
@@ -1356,7 +1376,7 @@ LogicalResult lowerStore(StoreOp store, const PointerChain& chain, bool masked, 
   到全局 buffer。与 gather 的 "alloc + gather" 相比，这里不需要额外
   alloc：`to_buffer` 在 bufferize 阶段会被直接消解成值的 materialization，
   临时内存由 bufferizer 分配。
-- `pumem.scatter` 参数顺序是 `(source, indices, destination, mask?)`，
+- `pumem.tile_scatter` 参数顺序是 `(source, indices, destination, mask?)`，
   destination 是 `memref<?xT>` 基址 token——方向与 gather 相反。
 - masked 时被屏蔽的 lane 既不读 tile 也不写全局。
 
@@ -1488,8 +1508,8 @@ offset。分析第二个 load 时，`buildValue` 发现 offset 来自 load →
 - `findBase` 找到 `%src`；
 - `buildChain`：`tt.addptr %pS, %m` → chain = `{src, %m}`；
 - `lowerLoad`：indices buffer 就是 `%m` 的 `to_buffer`，
-  `pumem.gather %src_token, %m_buf, %tile`；
-- store 对称成 `pumem.scatter`。
+  `pumem.tile_gather %src_token, %m_buf, %tile`；
+- store 对称成 `pumem.tile_scatter`。
 
 ### 6.5 64 位偏移（`@wide_offset`）
 

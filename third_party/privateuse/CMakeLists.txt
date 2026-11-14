@@ -25,6 +25,7 @@ add_triton_plugin(TritonPrivateUse ${CMAKE_CURRENT_SOURCE_DIR}/privateuse.cc LIN
   MLIRArithValueBoundsOpInterfaceImpl
   MLIRBufferizationDialect
   MLIRMemRefDialect
+  MLIRMemRefTransforms
   MLIRSCFDialect
   MLIRLinalgDialect
   MLIRTensorDialect

@@ -35,7 +35,7 @@ passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
 pm.add_pass(passes.common.add_canonicalizer(pm))
 privateuse.add_analyze_access(pm)            # 只诊断，不改 IR
 privateuse.add_lower_structured_access(pm)   # 规整访问 → memref.copy
-privateuse.add_lower_unstructured_access(pm) # 逐元素访问 → pumem.gather/scatter
+privateuse.add_lower_unstructured_access(pm) # 逐元素访问 → pumem.tile_gather/tile_scatter
 privateuse.add_ptr_to_memref(pm)             # 函数签名 / 地址链 → memref
 pm.add_pass(passes.common.add_canonicalizer(pm))
 pm.add_pass(passes.common.add_cse(pm))

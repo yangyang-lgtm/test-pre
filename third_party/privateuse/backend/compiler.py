@@ -186,6 +186,29 @@ def _fuse_and_bufferize(module):
     return module
 
 
+def _lower_linalg(module):
+    pm = ir.pass_manager(module.context)
+    pm.enable_debug()
+    privateuse.add_outline_linalg_ops(pm)
+    privateuse.add_lower_linalg_reduce(pm)
+    privateuse.add_convert_linalg_to_loops(pm)
+    passes.common.add_canonicalizer(pm)
+    pm.run(module, 'lower_linalg')
+    return module
+
+
+def _lower_to_pumem(module):
+    pm = ir.pass_manager(module.context)
+    pm.enable_debug()
+    privateuse.add_expand_strided_metadata(pm)
+    privateuse.add_memref_expand(pm)
+    privateuse.add_memref_to_pumem(pm)
+    privateuse.add_sink_constant_call_args(pm)
+    passes.common.add_canonicalizer(pm)
+    pm.run(module, 'lower_to_pumem')
+    return module
+
+
 def _emit_cpp(module, device_info):
     raise NotImplementedError("privateuse: no IR to C++ emission yet")
 
@@ -199,6 +222,8 @@ def lower_kernel_ir(kernel_ir, grid, device_info, kernel_name, args):
     module = _parse_ir(kernel_ir)
     module = _specialize_ir(module, grid, constants, device_info["lower"]["num_pids"])
     module = _fuse_and_bufferize(module)
+    module = _lower_linalg(module)
+    module = _lower_to_pumem(module)
     print(module)
     cpp = _emit_cpp(module, device_info)
     _check_entry_symbol(cpp, kernel_name)

@@ -1,2 +1,5 @@
+add_subdirectory(LowerLinalgReduce)
+add_subdirectory(OutlineLinalgOps)
 add_subdirectory(PidLoop)
+add_subdirectory(SinkConstantCallArgs)
 add_subdirectory(SpecializeKernel)
