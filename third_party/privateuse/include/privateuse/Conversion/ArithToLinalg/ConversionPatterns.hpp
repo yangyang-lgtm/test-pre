@@ -127,6 +127,7 @@ struct BroadcastConverter : public OpConversionPattern<triton::BroadcastOp>
         linalg::YieldOp::create(nestedBuilder, loc, blockArgs[0]);
       }
     );
+    linalgOp->setAttr("broadcastDims", rewriter.getDenseI64ArrayAttr(getBroadcastDims(sourceType, resultType)));
 
     rewriter.replaceOp(op, linalgOp->getResults());
     return success();

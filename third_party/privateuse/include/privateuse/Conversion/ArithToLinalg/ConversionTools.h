@@ -3,6 +3,7 @@
 
 #include "mlir/Dialect/Utils/StructuredOpsUtils.h"
 #include "mlir/IR/AffineMap.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "llvm/Support/ErrorHandling.h"
 
 namespace mlir {
@@ -11,6 +12,22 @@ namespace triton {
 static inline SmallVector<utils::IteratorType> getNParallelLoopsAttrs(unsigned n)
 {
   return SmallVector<utils::IteratorType>(n, utils::IteratorType::parallel);
+}
+
+static inline SmallVector<int64_t> getBroadcastDims(RankedTensorType src, RankedTensorType dst)
+{
+  SmallVector<int64_t> broadcastDims;
+  auto srcShape = src.getShape();
+  auto dstShape = dst.getShape();
+
+  for (size_t i = 0; i < srcShape.size(); i++) {
+    if (dstShape[i] != srcShape[i]) {
+      if (!(srcShape[i] == 1)) llvm::report_fatal_error("srcShape[i] == 1");
+      broadcastDims.push_back(i);
+    }
+  }
+  if (!(!broadcastDims.empty())) llvm::report_fatal_error("cannot identify broadcast dimension");
+  return broadcastDims;
 }
 
 static inline AffineMap

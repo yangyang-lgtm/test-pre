@@ -112,7 +112,7 @@ def _runtime_dir():
 
 
 class LoweringPipeline:
-    def __init__(self, lower):
+    def __init__(self, lower: dict):
         self._lower = lower
 
     def digest(self):
@@ -183,6 +183,7 @@ class LoweringPipeline:
     def _fuse_and_bufferize(self, module):
         pm = ir.pass_manager(module.context)
         pm.enable_debug()
+        privateuse.add_collapse_shape(pm)
         privateuse.add_empty_tensor_to_alloc_tensor(pm)
         privateuse.add_bufferize(pm)
         passes.common.add_canonicalizer(pm)
