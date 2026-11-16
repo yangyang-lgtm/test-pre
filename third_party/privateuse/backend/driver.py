@@ -329,7 +329,8 @@ class PrivateUseLauncher(object):
 
         kernel_arg_index = [index for index, ty in sorted(signature.items()) if ty != "constexpr"]
         launcher = compile_module(launcher_src, kernel_placeholder_name, metadata, kernel_arg_index)
-        runtime_backend = metadata.device_info["lower"]["runtime_backend"]
+        from triton.backends.privateuse.compiler import LoweringPipeline
+        runtime_backend = LoweringPipeline.runtime_backend
         self.launch = PrivateUseLauncher.launcher_wrapper(launcher, runtime_backend == "cpu")
 
     def __call__(self, *args, **kwargs):

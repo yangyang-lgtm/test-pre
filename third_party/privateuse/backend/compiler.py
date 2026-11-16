@@ -112,11 +112,17 @@ def _runtime_dir():
 
 
 class LoweringPipeline:
-    def __init__(self, lower: dict):
-        self._lower = lower
+    runtime_backend: str = "cpu"
+    num_pids: int = 32
+    num_blocks: int = 5
+    block_bytes: int = 1 << 18
+    launcher_attr: str = 'extern "C"'
+    kernel_attr: str = "GLOBAL"
+    outlined_attr: str = "OUTLINED"
 
     def digest(self):
-        return _compiler_digest()
+        settings = {name: getattr(self, name) for name in type(self).__annotations__}
+        return hashlib.sha256(repr((sorted(settings.items()), _compiler_digest())).encode("utf-8")).hexdigest()
 
     def __call__(self, kernel_ir, grid, kernel_name, args):
         constants = self._kernel_constants(kernel_ir, kernel_name, args)
@@ -174,7 +180,7 @@ class LoweringPipeline:
         privateuse.add_ptr_to_memref(pm)
         passes.common.add_canonicalizer(pm)
         privateuse.add_arith_to_linalg(pm)
-        privateuse.add_pid_loop(pm, self._lower["num_pids"])
+        privateuse.add_pid_loop(pm, self.num_pids)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         pm.run(module, 'specialize_kernel')
@@ -194,7 +200,7 @@ class LoweringPipeline:
         pm = ir.pass_manager(module.context)
         pm.enable_debug()
         privateuse.add_linalg_to_runtime_call(pm)
-        privateuse.add_outline_linalg_ops(pm, self._lower["outlined_attr"])
+        privateuse.add_outline_linalg_ops(pm, self.outlined_attr)
         privateuse.add_lower_linalg_reduce(pm)
         privateuse.add_convert_linalg_to_loops(pm)
         passes.common.add_canonicalizer(pm)
@@ -219,7 +225,6 @@ class LoweringPipeline:
         return module
 
     def _emit_cpp(self, module):
-        lower = self._lower
         pm = ir.pass_manager(module.context)
         pm.enable_debug()
         privateuse.add_reconcile_unrealized_casts(pm)
@@ -228,10 +233,10 @@ class LoweringPipeline:
         privateuse.add_puc_simplify_assign(pm)
         privateuse.add_puc_void_ptr_args(pm)
         passes.common.add_cse(pm)
-        privateuse.add_puc_launch(pm, lower["launcher_attr"], lower["kernel_attr"])
+        privateuse.add_puc_launch(pm, self.launcher_attr, self.kernel_attr)
         passes.common.add_canonicalizer(pm)
         pm.run(module, 'emit_cpp')
-        return privateuse.translate_puc_to_cpp(module, lower["runtime_backend"], lower["num_pids"])
+        return privateuse.translate_puc_to_cpp(module, self.runtime_backend, self.num_pids)
 
     def _compile_object(self, cpp):
         runtime_dir = _runtime_dir()
@@ -247,39 +252,29 @@ class LoweringPipeline:
 
 
 class DeviceInfo:
-    def __init__(self, fields, lower):
+    def __init__(self, fields):
         self.fields = dict(fields)
-        self.lower = dict(lower)
 
     @property
     def pipeline(self):
-        return LoweringPipeline(self.lower)
+        return LoweringPipeline()
 
     @staticmethod
-    def from_options(target, options):
+    def from_options(target):
         fields = {
             "target_backend": target.backend,
             "target_arch": target.arch,
             "target_warp_size": target.warp_size,
             "python_abi": f"{sys.version_info.major}.{sys.version_info.minor}",
         }
-        lower = {
-            "runtime_backend": options.runtime_backend,
-            "num_pids": options.num_pids,
-            "num_blocks": options.num_blocks,
-            "block_bytes": options.block_bytes,
-            "launcher_attr": options.launcher_attr,
-            "kernel_attr": options.kernel_attr,
-            "outlined_attr": options.outlined_attr,
-        }
-        return DeviceInfo(fields, lower)
+        return DeviceInfo(fields)
 
     @staticmethod
     def from_dict(payload):
-        return DeviceInfo(payload["fields"], payload["lower"])
+        return DeviceInfo(payload["fields"])
 
     def digest(self):
-        payload = repr((sorted(self.fields.items()), sorted(self.lower.items()), self.pipeline.digest()))
+        payload = repr((sorted(self.fields.items()), self.pipeline.digest()))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -301,13 +296,6 @@ class PrivateUseOptions:
     sanitize_overflow: bool = True
     fpsan_homomorphic_casts: bool = False
     instrumentation_mode: str = ""
-    runtime_backend: str = "cpu"
-    num_pids: int = 32
-    num_blocks: int = 5
-    block_bytes: int = 1 << 18
-    launcher_attr: str = 'extern "C"'
-    kernel_attr: str = "GLOBAL"
-    outlined_attr: str = "OUTLINED"
 
     def __post_init__(self):
         pass
@@ -363,7 +351,7 @@ class PrivateUseBackend(BaseBackend):
         return mod
 
     def add_stages(self, stages, options, language):
-        device_info = DeviceInfo.from_options(self.target, options)
+        device_info = DeviceInfo.from_options(self.target)
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options, device_info)
 
     @functools.lru_cache()
