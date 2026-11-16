@@ -84,14 +84,15 @@ def _format_of(ty):
     }[_ty_to_cpp(ty)]
 
 
-def _generate_cpp_launcher(constants, signature, kernel_name):
+def _generate_launcher(constants, signature, kernel_name):
     args_format = ''.join("O" if ty[0] == "*" else _format_of(ty) for ty in signature.values())
     format = "iiiOOOO" + args_format
 
     arg_decls = ', '.join(
         f"void* arg{i}" if ty[0] == "*" else f"{_ty_to_cpp(ty)} arg{i}"
         for i, ty in signature.items()
-        if ty != "constexpr")
+        if ty != "constexpr"
+    )
 
     kernel_arg_decls = ', '.join(f"void* arg{i}" for i, ty in signature.items() if ty[0] == "*")
     kernel_arg_decls = kernel_arg_decls + ', ' if kernel_arg_decls else ''
@@ -324,7 +325,7 @@ class PrivateUseLauncher(object):
 
         constants = {cst_key(key): value for key, value in constants.items()}
         signature = {cst_key(key): value for key, value in src.signature.items()}
-        launcher_src = _generate_cpp_launcher(constants, signature, kernel_placeholder_name)
+        launcher_src = _generate_launcher(constants, signature, kernel_placeholder_name)
 
         kernel_arg_index = [index for index, ty in sorted(signature.items()) if ty != "constexpr"]
         launcher = compile_module(launcher_src, kernel_placeholder_name, metadata, kernel_arg_index)
