@@ -1,16 +1,19 @@
-from triton.backends.compiler import BaseBackend, GPUTarget
-from triton._C.libtriton import get_cache_invalidating_env_vars, ir, passes, privateuse
-from triton.runtime.cache import triton_key
-from dataclasses import dataclass
-from typing import Any, Dict, Tuple
-import hashlib
-import functools
 import os
+import sys
 import re
 import subprocess
-import sys
+import hashlib
+import functools
 import tempfile
+
 from pathlib import Path
+from dataclasses import dataclass
+from typing import Any, Dict, Tuple
+
+from triton.backends.compiler import BaseBackend, GPUTarget
+from triton.runtime.cache import triton_key
+
+from triton._C.libtriton import get_cache_invalidating_env_vars, ir, passes, privateuse
 
 
 _BACKEND_DIR = Path(__file__).resolve().parent
@@ -31,6 +34,7 @@ _DTYPE_TO_IR = {
     "uint32": "ui32",
     "uint64": "ui64",
 }
+
 
 @functools.lru_cache(maxsize=1)
 def _compiler_digest():
@@ -55,8 +59,9 @@ def _entry_name(mod):
 def _check_entry_symbol(cpp, kernel_name):
     symbols = _EXTERN_C_RE.findall(cpp)
     if kernel_name + "_launcher" not in symbols:
-        raise RuntimeError(f"privateuse: lowered kernel exports {symbols}, "
-                           f"the launcher expects '{kernel_name}_launcher'")
+        raise RuntimeError(
+            f"privateuse: lowered kernel exports {symbols}, the launcher expects '{kernel_name}_launcher'"
+        )
 
 
 def _split_params(text):
@@ -77,7 +82,9 @@ def _split_params(text):
 
 def _ir_param_types(kernel_ir, kernel_name):
     for line in kernel_ir.splitlines():
-        match = re.match(rf"\s*(?:tt\.func|func\.func)\s+(?:(?:private|public|nested)\s+)?@{re.escape(kernel_name)}\(", line)
+        match = re.match(
+            rf"\s*(?:tt\.func|func\.func)\s+(?:(?:private|public|nested)\s+)?@{re.escape(kernel_name)}\(", line
+        )
         if match is None:
             continue
         types = []
@@ -107,10 +114,6 @@ def _arg_mismatch(arg, ir_type):
     return f"expected an int, got {type(arg).__name__}"
 
 
-def _runtime_dir():
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime")
-
-
 class LoweringPipeline:
     runtime_backend: str = "cpu"
     num_pids: int = 32
@@ -129,6 +132,7 @@ class LoweringPipeline:
         module = self._parse_ir(kernel_ir)
         module = self._specialize(module, grid, constants)
         module = self._fuse_and_bufferize(module)
+        module = self._software_pipeline(module)
         module = self._transform(module)
         module = self._lower_to_pumem(module)
         cpp = self._emit_cpp(module)
@@ -196,6 +200,9 @@ class LoweringPipeline:
         pm.run(module, 'fuse_and_bufferize')
         return module
 
+    def _software_pipeline(self, module):
+        return module
+
     def _transform(self, module):
         pm = ir.pass_manager(module.context)
         pm.enable_debug()
@@ -239,7 +246,7 @@ class LoweringPipeline:
         return privateuse.translate_puc_to_cpp(module, self.runtime_backend, self.num_pids)
 
     def _compile_object(self, cpp):
-        runtime_dir = _runtime_dir()
+        runtime_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime")
         with tempfile.TemporaryDirectory() as tmpdir:
             src_path = os.path.join(tmpdir, "kernel.cpp")
             so_path = os.path.join(tmpdir, "kernel.so")

@@ -261,8 +261,9 @@ def compile_module(launcher_src, kernel_placeholder_name, metadata, kernel_arg_i
             raise RuntimeError(f"Cannot find {name} module in {cache_path}")
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        return mod.launch(gridX, gridY, gridZ, kernel_metadata, launch_metadata,
-                          launch_enter_hook, launch_exit_hook, *args)
+        return mod.launch(
+            gridX, gridY, gridZ, kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, *args
+        )
 
     return launch
 
