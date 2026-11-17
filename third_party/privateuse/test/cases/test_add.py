@@ -14,8 +14,8 @@ def kernel(pa, pb, pc, num, BLOCK: tl.constexpr):
     offset = pid * BLOCK + tl.arange(0, BLOCK)
     mask = offset < num
 
-    a = tl.load(pa + offset, mask=mask)
-    b = tl.load(pb + offset, mask=mask)
+    a = tl.load(pa + offset, mask=mask, other=0)
+    b = tl.load(pb + offset, mask=mask, other=0)
     c = a + b
     tl.store(pc + offset, c, mask=mask)
 
@@ -30,7 +30,7 @@ def add(x: torch.Tensor, y: torch.Tensor):
 
 class TestAddCase(TestCase):
 
-    @parametrize("shape", [(32, 32), (32, 64, 128)])
+    @parametrize("shape", [(100, 13), (32, 32), (32, 64, 128)])
     @parametrize("dtype", [torch.float32, torch.int32])
     def test_add(self, shape, dtype):
         cpu_x, private_x = make_inputs(shape, dtype)

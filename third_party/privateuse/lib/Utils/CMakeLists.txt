@@ -9,3 +9,4 @@ add_triton_library(PrivateUseUtils
 )
 
 add_subdirectory(AccessAnalysis)
+add_subdirectory(DataflowAnalysis)

@@ -201,6 +201,10 @@ class LoweringPipeline:
         return module
 
     def _software_pipeline(self, module):
+        pm = ir.pass_manager(module.context)
+        pm.enable_debug()
+        privateuse.add_analyze_dataflow(pm)
+        pm.run(module, 'dataflow_analysis')
         return module
 
     def _transform(self, module):

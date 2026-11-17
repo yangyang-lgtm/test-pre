@@ -2,6 +2,10 @@
 
 #include "privateuse/Utils/Utils.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+
+#include "llvm/Support/MathExtras.h"
+
 #include <algorithm>
 #include <array>
 #include <iterator>
@@ -34,7 +38,7 @@ int64_t unsignedMax(int64_t lhs, int64_t rhs)
 
 template <typename T, typename MapT>
 std::optional<T>
-lookupSymbol(const std::array<std::optional<T>, 3>& pids, const MapT& loopIvs, SymKind kind, unsigned id)
+lookupSymbol(const std::array<std::optional<T>, kNumAxes>& pids, const MapT& loopIvs, SymKind kind, unsigned id)
 {
   if (kind == SymKind::LoopIv) {
     auto it = loopIvs.find(id);
@@ -48,9 +52,12 @@ std::optional<int64_t> applyBinOp(ScalarExpr::Kind kind, int64_t lhs, int64_t rh
 {
   int64_t result = 0;
   switch (kind) {
-    case ScalarExpr::Kind::Add: return checkedAdd(lhs, rhs, result) ? std::optional<int64_t>(result) : std::nullopt;
-    case ScalarExpr::Kind::Sub: return checkedSub(lhs, rhs, result) ? std::optional<int64_t>(result) : std::nullopt;
-    case ScalarExpr::Kind::Mul: return checkedMul(lhs, rhs, result) ? std::optional<int64_t>(result) : std::nullopt;
+    case ScalarExpr::Kind::Add:
+      return !llvm::AddOverflow(lhs, rhs, result) ? std::optional<int64_t>(result) : std::nullopt;
+    case ScalarExpr::Kind::Sub:
+      return !llvm::SubOverflow(lhs, rhs, result) ? std::optional<int64_t>(result) : std::nullopt;
+    case ScalarExpr::Kind::Mul:
+      return !llvm::MulOverflow(lhs, rhs, result) ? std::optional<int64_t>(result) : std::nullopt;
     case ScalarExpr::Kind::DivS:
       if (rhs == 0 || (lhs == std::numeric_limits<int64_t>::min() && rhs == -1)) return std::nullopt;
       return lhs / rhs;
@@ -255,7 +262,7 @@ Interval evaluateShiftLeft(const Interval& lhs, const Interval& rhs)
   int64_t factor = int64_t(1) << shift;
   int64_t lo     = 0;
   int64_t hi     = 0;
-  if (!checkedMul(lhs.lo, factor, lo) || !checkedMul(lhs.hi, factor, hi)) return Interval::unknown();
+  if (llvm::MulOverflow(lhs.lo, factor, lo) || llvm::MulOverflow(lhs.hi, factor, hi)) return Interval::unknown();
   return Interval{true, true, lo, hi};
 }
 
@@ -302,6 +309,28 @@ Interval evaluateXor(const Interval& lhs, const Interval& rhs)
 }
 
 } // namespace
+
+std::optional<ScalarExpr::Kind> scalarExprKind(Operation* op)
+{
+  if (isa<arith::AddIOp>(op)) return ScalarExpr::Kind::Add;
+  if (isa<arith::SubIOp>(op)) return ScalarExpr::Kind::Sub;
+  if (isa<arith::MulIOp>(op)) return ScalarExpr::Kind::Mul;
+  if (isa<arith::DivSIOp>(op)) return ScalarExpr::Kind::DivS;
+  if (isa<arith::DivUIOp>(op)) return ScalarExpr::Kind::DivU;
+  if (isa<arith::RemSIOp>(op)) return ScalarExpr::Kind::RemS;
+  if (isa<arith::RemUIOp>(op)) return ScalarExpr::Kind::RemU;
+  if (isa<arith::ShLIOp>(op)) return ScalarExpr::Kind::Shl;
+  if (isa<arith::ShRSIOp>(op)) return ScalarExpr::Kind::ShrS;
+  if (isa<arith::ShRUIOp>(op)) return ScalarExpr::Kind::ShrU;
+  if (isa<arith::MinSIOp>(op)) return ScalarExpr::Kind::MinS;
+  if (isa<arith::MaxSIOp>(op)) return ScalarExpr::Kind::MaxS;
+  if (isa<arith::MinUIOp>(op)) return ScalarExpr::Kind::MinU;
+  if (isa<arith::MaxUIOp>(op)) return ScalarExpr::Kind::MaxU;
+  if (isa<arith::AndIOp>(op)) return ScalarExpr::Kind::And;
+  if (isa<arith::OrIOp>(op)) return ScalarExpr::Kind::Or;
+  if (isa<arith::XOrIOp>(op)) return ScalarExpr::Kind::Xor;
+  return std::nullopt;
+}
 
 ExprPtr ScalarExpr::cst(int64_t value)
 {
@@ -401,11 +430,11 @@ Interval evaluateInterval(const ScalarExpr& expr, const SymbolBounds& bounds)
     case ScalarExpr::Kind::Add: {
       Interval result;
       int64_t value = 0;
-      if (lhs.hasLo && rhs.hasLo && checkedAdd(lhs.lo, rhs.lo, value)) {
+      if (lhs.hasLo && rhs.hasLo && !llvm::AddOverflow(lhs.lo, rhs.lo, value)) {
         result.hasLo = true;
         result.lo    = value;
       }
-      if (lhs.hasHi && rhs.hasHi && checkedAdd(lhs.hi, rhs.hi, value)) {
+      if (lhs.hasHi && rhs.hasHi && !llvm::AddOverflow(lhs.hi, rhs.hi, value)) {
         result.hasHi = true;
         result.hi    = value;
       }
@@ -414,11 +443,11 @@ Interval evaluateInterval(const ScalarExpr& expr, const SymbolBounds& bounds)
     case ScalarExpr::Kind::Sub: {
       Interval result;
       int64_t value = 0;
-      if (lhs.hasLo && rhs.hasHi && checkedSub(lhs.lo, rhs.hi, value)) {
+      if (lhs.hasLo && rhs.hasHi && !llvm::SubOverflow(lhs.lo, rhs.hi, value)) {
         result.hasLo = true;
         result.lo    = value;
       }
-      if (lhs.hasHi && rhs.hasLo && checkedSub(lhs.hi, rhs.lo, value)) {
+      if (lhs.hasHi && rhs.hasLo && !llvm::SubOverflow(lhs.hi, rhs.lo, value)) {
         result.hasHi = true;
         result.hi    = value;
       }
@@ -431,7 +460,7 @@ Interval evaluateInterval(const ScalarExpr& expr, const SymbolBounds& bounds)
       std::array<int64_t, 4> products{};
       for (size_t i = 0; i < lhsValues.size(); ++i) {
         for (size_t j = 0; j < rhsValues.size(); ++j) {
-          if (!checkedMul(lhsValues[i], rhsValues[j], products[i * 2 + j])) return Interval::unknown();
+          if (llvm::MulOverflow(lhsValues[i], rhsValues[j], products[i * 2 + j])) return Interval::unknown();
         }
       }
       Interval result;

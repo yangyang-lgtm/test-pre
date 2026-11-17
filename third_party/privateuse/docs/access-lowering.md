@@ -193,8 +193,8 @@ struct AccessView {
   - 对标量结果，要求 `dims` 为空。
 - `isInjective()`：判断从逻辑下标到线性偏移的映射是否一一对应。做法是
   把 `size > 1` 的维度按 stride 升序排序，然后要求每个 stride **严格
-  大于**此前所有维度覆盖的跨度 `span`（用 `Int128` 做 128 位累加以防
-  溢出）：
+  大于**此前所有维度覆盖的跨度 `span`（用 `llvm::MulOverflow` /
+  `llvm::AddOverflow` 检测累加溢出）：
 
   ```
   span = 0
@@ -369,9 +369,9 @@ Value createBufferWindow(OpBuilder&, Location, Value buf,
 - `createBufferWindow`：对 tile buffer 生成 `memref.subview`
   `[0,0,...] [size_0,...,size_n] [1,...,1]`，即"有效窗口"。静态维度
   用 `getIndexAttr`，动态维度用分析物化出的 Value。
-- `Int128` + `checkedAdd/Sub/Mul`：所有常量区间的算术语义都要"溢出即
-  放弃"（返回 false，让分析退化为 unknown），手写 128 位检查而不用
-  `__builtin_*_overflow`，保证不同编译器/目标下行为一致。
+- 常量区间算术直接调用 LLVM 的 `llvm::AddOverflow` / `llvm::SubOverflow` /
+  `llvm::MulOverflow`：所有语义都要“溢出即放弃”（让分析退化为 unknown），
+  由 LLVM 选择 builtin 或可移植回退实现。
 
 ### 2.6 `PUMem` dialect 的 Gather / Scatter
 

@@ -20,6 +20,7 @@
 #include "privateuse/Transform/SinkConstantCallArgs/Passes.h"
 #include "privateuse/Transform/SpecializeKernel/SpecializeKernel.h"
 #include "privateuse/Utils/AccessAnalysis/Passes.h"
+#include "privateuse/Utils/DataflowAnalysis/Passes.h"
 #include "privateuse/PucTranslate/PucTranslate.h"
 
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
@@ -109,6 +110,9 @@ void init_triton_privateuse(py::module_& m)
   );
 
   m.def("add_analyze_access", [](PassManager& pm) { pm.addPass(triton::createAnalyzeAccessPass()); }, py::arg("pm"));
+  m.def(
+    "add_analyze_dataflow", [](PassManager& pm) { pm.addPass(triton::createAnalyzeDataflowPass()); }, py::arg("pm")
+  );
 
   m.def(
     "add_pid_loop", [](PassManager& pm, int64_t numPids) { pm.addPass(triton::createPidLoopPass(numPids)); },

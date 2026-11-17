@@ -142,8 +142,8 @@ private:
   llvm::DenseMap<Operation*, unsigned> loopIds_;
   unsigned nextLoopId_ = 0;
   llvm::DenseSet<Value> resolving_;
-  DeferredReason deferred_        = DeferredReason::None;
-  std::array<Value, 3> pidValues_ = {};
+  DeferredReason deferred_               = DeferredReason::None;
+  std::array<Value, kNumAxes> pidValues_ = {};
   llvm::DenseMap<unsigned, Value> ivValues_;
 };
 

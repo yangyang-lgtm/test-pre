@@ -7,6 +7,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Support/MathExtras.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
@@ -85,7 +86,7 @@ std::optional<int64_t> constantFactor(const AccessView& view)
   if (view.offset && !view.offset->isConst()) return std::nullopt;
   int64_t sum = view.offset ? view.offset->value : 0;
   for (const AccessDim& dim : view.dims)
-    if (!checkedAdd(sum, dim.start->value, sum)) return std::nullopt;
+    if (llvm::AddOverflow(sum, dim.start->value, sum)) return std::nullopt;
   return sum;
 }
 
@@ -104,28 +105,6 @@ Value integerCastSource(Value value)
   return {};
 }
 
-std::optional<ScalarExpr::Kind> scalarBinaryKind(Operation* op)
-{
-  if (isa<arith::AddIOp>(op)) return ScalarExpr::Kind::Add;
-  if (isa<arith::SubIOp>(op)) return ScalarExpr::Kind::Sub;
-  if (isa<arith::MulIOp>(op)) return ScalarExpr::Kind::Mul;
-  if (isa<arith::DivSIOp>(op)) return ScalarExpr::Kind::DivS;
-  if (isa<arith::DivUIOp>(op)) return ScalarExpr::Kind::DivU;
-  if (isa<arith::RemSIOp>(op)) return ScalarExpr::Kind::RemS;
-  if (isa<arith::RemUIOp>(op)) return ScalarExpr::Kind::RemU;
-  if (isa<arith::ShLIOp>(op)) return ScalarExpr::Kind::Shl;
-  if (isa<arith::ShRSIOp>(op)) return ScalarExpr::Kind::ShrS;
-  if (isa<arith::ShRUIOp>(op)) return ScalarExpr::Kind::ShrU;
-  if (isa<arith::MinSIOp>(op)) return ScalarExpr::Kind::MinS;
-  if (isa<arith::MaxSIOp>(op)) return ScalarExpr::Kind::MaxS;
-  if (isa<arith::MinUIOp>(op)) return ScalarExpr::Kind::MinU;
-  if (isa<arith::MaxUIOp>(op)) return ScalarExpr::Kind::MaxU;
-  if (isa<arith::AndIOp>(op)) return ScalarExpr::Kind::And;
-  if (isa<arith::OrIOp>(op)) return ScalarExpr::Kind::Or;
-  if (isa<arith::XOrIOp>(op)) return ScalarExpr::Kind::Xor;
-  return std::nullopt;
-}
-
 int64_t elementByteWidth(Type pointee)
 {
   if (auto integer = dyn_cast<IntegerType>(pointee)) return std::max<int64_t>(1, integer.getWidth() / 8);
@@ -138,11 +117,11 @@ Interval addIntervals(Interval lhs, Interval rhs)
 {
   Interval result;
   int64_t value = 0;
-  if (lhs.hasLo && rhs.hasLo && checkedAdd(lhs.lo, rhs.lo, value)) {
+  if (lhs.hasLo && rhs.hasLo && !llvm::AddOverflow(lhs.lo, rhs.lo, value)) {
     result.hasLo = true;
     result.lo    = value;
   }
-  if (lhs.hasHi && rhs.hasHi && checkedAdd(lhs.hi, rhs.hi, value)) {
+  if (lhs.hasHi && rhs.hasHi && !llvm::AddOverflow(lhs.hi, rhs.hi, value)) {
     result.hasHi = true;
     result.hi    = value;
   }
@@ -163,9 +142,9 @@ Interval rangeOfValue(const ExprPtr& offset, const SmallVector<AccessDim>& dims,
     span.hasLo = true;
     span.hasHi = true;
     if (dim.stride > 0) {
-      if (!checkedMul(dim.stride, dim.size - 1, span.hi)) return Interval::unknown();
+      if (llvm::MulOverflow(dim.stride, dim.size - 1, span.hi)) return Interval::unknown();
     } else if (dim.stride < 0) {
-      if (!checkedMul(dim.stride, dim.size - 1, span.lo)) return Interval::unknown();
+      if (llvm::MulOverflow(dim.stride, dim.size - 1, span.lo)) return Interval::unknown();
     }
     total = addIntervals(total, span);
   }
@@ -207,7 +186,7 @@ std::optional<bool> foldConstantComparison(const AccessView& diff, bool strict, 
 void evaluateBound(const LinearBound& bound, int64_t size, const SymbolBounds& bounds, bool& holds, bool& fails)
 {
   int64_t span   = 0;
-  bool spanKnown = checkedMul(bound.stride, size - 1, span);
+  bool spanKnown = !llvm::MulOverflow(bound.stride, size - 1, span);
 
   Interval atStart = rangeOfExpr(bound.offset, bounds);
   Interval atEnd   = Interval::unknown();
@@ -307,10 +286,12 @@ bool AccessView::isInjective() const
     if (dim.size > 1) sorted.push_back(&dim);
   llvm::sort(sorted, [](const AccessDim* lhs, const AccessDim* rhs) { return lhs->stride < rhs->stride; });
 
-  Int128 span = Int128::fromInt64(0);
+  int64_t span = 0;
   for (const AccessDim* dim : sorted) {
-    if (Int128::fromInt64(dim->stride) <= span) return false;
-    span = span + Int128::fromInt64(dim->size - 1) * Int128::fromInt64(dim->stride);
+    if (dim->stride <= span) return false;
+    int64_t extent = 0;
+    if (llvm::MulOverflow(dim->size - 1, dim->stride, extent) || llvm::AddOverflow(span, extent, span))
+      span = std::numeric_limits<int64_t>::max();
   }
   return true;
 }
@@ -318,7 +299,7 @@ bool AccessView::isInjective() const
 AccessAnalyzer::AccessAnalyzer(ModuleOp module)
 {
   if (auto grid = module->getAttrOfType<DenseI64ArrayAttr>(kGridAttr)) {
-    for (int axis = 0; axis < 3 && axis < grid.size(); ++axis) {
+    for (int axis = 0; axis < kNumAxes && axis < grid.size(); ++axis) {
       if (grid[axis] <= 0) continue;
       Interval interval;
       interval.hasLo     = true;
@@ -359,7 +340,7 @@ void AccessAnalyzer::recordLoopIv(scf::ForOp loop)
   if (!lower.hasLo || !upper.hasHi) return;
 
   int64_t last = 0;
-  if (!checkedSub(upper.hi, 1, last)) return;
+  if (llvm::SubOverflow(upper.hi, int64_t(1), last)) return;
 
   Interval interval;
   interval.hasLo      = true;
@@ -378,7 +359,7 @@ FailureOr<ExprPtr> AccessAnalyzer::buildScalar(Value value)
 
   if (auto pid = value.getDefiningOp<GetProgramIdOp>()) {
     int axis = pid.getAxisAsInt();
-    if (axis < 0 || axis >= 3) return emitFailure(value.getLoc(), "unsupported program id axis " + Twine(axis));
+    if (axis < 0 || axis >= kNumAxes) return emitFailure(value.getLoc(), "unsupported program id axis " + Twine(axis));
     pidValues_[axis] = pid.getResult();
     return ScalarExpr::sym(static_cast<SymKind>(static_cast<int>(SymKind::PidX) + axis));
   }
@@ -397,7 +378,7 @@ FailureOr<ExprPtr> AccessAnalyzer::buildScalar(Value value)
   Operation* def = value.getDefiningOp();
   if (!def) return emitFailure(value.getLoc(), "value has no definition");
 
-  if (auto kind = scalarBinaryKind(def)) {
+  if (auto kind = scalarExprKind(def)) {
     auto lhs = buildScalar(def->getOperand(0));
     if (failed(lhs)) return failure();
     auto rhs = buildScalar(def->getOperand(1));
@@ -520,7 +501,7 @@ FailureOr<AccessView> AccessAnalyzer::scale(AccessView value, int64_t factor, Lo
   view.dims   = std::move(value.dims);
   for (AccessDim& dim : view.dims) {
     dim.start = ScalarExpr::mul(dim.start, factorExpr);
-    if (!checkedMul(dim.stride, factor, dim.stride)) return emitFailure(loc, "overflow while scaling strides");
+    if (llvm::MulOverflow(dim.stride, factor, dim.stride)) return emitFailure(loc, "overflow while scaling strides");
   }
   return view;
 }
@@ -545,7 +526,8 @@ AccessAnalyzer::combineViews(AccessView lhs, AccessView rhs, bool subtract, Type
       return emitFailure(loc, "shape mismatch in address arithmetic");
     view.dims[i].start = subtract ? ScalarExpr::sub(left.start, right.start) : ScalarExpr::add(left.start, right.start);
     int64_t stride     = 0;
-    if (subtract ? !checkedSub(left.stride, right.stride, stride) : !checkedAdd(left.stride, right.stride, stride))
+    if (subtract ? llvm::SubOverflow(left.stride, right.stride, stride)
+                 : llvm::AddOverflow(left.stride, right.stride, stride))
       return emitFailure(loc, "overflow while combining strides");
     view.dims[i].stride = stride;
     view.dims[i].size   = left.size ? left.size : right.size;

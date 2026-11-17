@@ -3,6 +3,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/raw_ostream.h"
+#include "privateuse/Utils/Constants.h"
 
 #include <array>
 #include <cstdint>
@@ -10,6 +11,8 @@
 #include <optional>
 
 namespace mlir {
+class Operation;
+
 namespace triton {
 
 enum class SymKind : uint8_t { PidX, PidY, PidZ, LoopIv };
@@ -61,7 +64,7 @@ struct ScalarExpr
 
 struct SymbolValues
 {
-  std::array<std::optional<int64_t>, 3> pids;
+  std::array<std::optional<int64_t>, kNumAxes> pids;
   llvm::DenseMap<unsigned, int64_t> loopIvs;
 
   std::optional<int64_t> lookup(SymKind kind, unsigned id) const;
@@ -81,11 +84,13 @@ struct Interval
 
 struct SymbolBounds
 {
-  std::array<std::optional<Interval>, 3> pids;
+  std::array<std::optional<Interval>, kNumAxes> pids;
   llvm::DenseMap<unsigned, Interval> loopIvs;
 
   std::optional<Interval> lookup(SymKind kind, unsigned id) const;
 };
+
+std::optional<ScalarExpr::Kind> scalarExprKind(Operation* op);
 
 std::optional<int64_t> evaluate(const ScalarExpr& expr, const SymbolValues& values);
 Interval evaluateInterval(const ScalarExpr& expr, const SymbolBounds& bounds);
