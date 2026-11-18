@@ -1,4 +1,5 @@
 add_subdirectory(CollapseShape)
+add_subdirectory(HoistInvariantStaging)
 add_subdirectory(LinalgToRuntimeCall)
 add_subdirectory(LowerLinalgReduce)
 add_subdirectory(OutlineLinalgOps)
@@ -13,6 +14,7 @@ add_subdirectory(SpecializeKernel)
 add_triton_library(PrivateUseTransforms
   DEPENDS
   CollapseShapeTransformPassIncGen
+  HoistInvariantStagingTransformPassIncGen
   LinalgToRuntimeCallTransformPassIncGen
   LowerLinalgReduceTransformPassIncGen
   OutlineLinalgOpsTransformPassIncGen
@@ -26,6 +28,7 @@ add_triton_library(PrivateUseTransforms
 
   LINK_LIBS PUBLIC
   CollapseShape
+  HoistInvariantStaging
   LinalgToRuntimeCall
   LowerLinalgReduce
   OutlineLinalgOps

@@ -1,12 +1,16 @@
+#include "privateuse/Utils/Utils.h"
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace mlir {
 namespace triton {
@@ -47,6 +51,27 @@ Value createBufferWindow(OpBuilder& builder, Location loc, Value buf, ArrayRef<i
     strides.push_back(builder.getIndexAttr(1));
   }
   return memref::SubViewOp::create(builder, loc, buf, offsets, sizes, strides);
+}
+
+void runWithRestore(Operation* op, llvm::function_ref<void()> body, bool logError)
+{
+  Operation* snapshot = op->clone();
+  try {
+    body();
+  } catch (const RewriteError& error) {
+    Block* block = op->getBlock();
+    if (!block) {
+      if (logError) llvm::errs() << "[privateuse-restore] " << error.what() << " (operation is not in a block)\n";
+      snapshot->destroy();
+      return;
+    }
+    block->getOperations().insert(op->getIterator(), snapshot);
+    op->replaceAllUsesWith(snapshot);
+    op->erase();
+    if (logError) llvm::errs() << "[privateuse-restore] " << error.what() << '\n';
+    return;
+  }
+  snapshot->destroy();
 }
 }
 

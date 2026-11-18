@@ -48,6 +48,7 @@
 #include "privateuse/Dialect/PuMath/IR/PuMathDialect.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
 #include "privateuse/Dialect/Puc/IR/PucDialect.h"
+#include "privateuse/Transform/HoistInvariantStaging/Passes.h"
 #include "privateuse/Transform/LinalgToRuntimeCall/Passes.h"
 #include "privateuse/Transform/LowerLinalgReduce/Passes.h"
 #include "privateuse/Transform/OutlineLinalgOps/Passes.h"
@@ -59,7 +60,6 @@
 #include "privateuse/Transform/SinkConstantCallArgs/Passes.h"
 #include "privateuse/Transform/SpecializeKernel/Passes.h"
 #include "privateuse/Utils/AccessAnalysis/Passes.h"
-#include "privateuse/Utils/DataflowAnalysis/Passes.h"
 
 #include "mlir/InitAllPasses.h"
 
@@ -84,7 +84,6 @@ inline void registerPrivateUseDialects(mlir::DialectRegistry& registry)
   mlir::vector::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::triton::registerTritonPasses();
   mlir::triton::registerAccessAnalysisPasses();
-  mlir::triton::registerDataflowAnalysisPasses();
   mlir::triton::registerAccessLoweringPasses();
   mlir::triton::registerArithToLinalgPasses();
   mlir::triton::registerArithToPuarithPass();
@@ -93,6 +92,7 @@ inline void registerPrivateUseDialects(mlir::DialectRegistry& registry)
   mlir::triton::registerMemrefToPumemPasses();
   mlir::triton::registerScfToPumemPass();
   mlir::triton::registerToPucPasses();
+  mlir::triton::registerHoistInvariantStagingPasses();
   mlir::triton::registerLinalgToRuntimeCallPasses();
   mlir::triton::registerLowerLinalgReducePasses();
   mlir::triton::registerOutlineLinalgOpsPasses();

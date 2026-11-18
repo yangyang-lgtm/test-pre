@@ -132,7 +132,6 @@ class LoweringPipeline:
         module = self._parse_ir(kernel_ir)
         module = self._specialize(module, grid, constants)
         module = self._fuse_and_bufferize(module)
-        module = self._software_pipeline(module)
         module = self._transform(module)
         module = self._lower_to_pumem(module)
         cpp = self._emit_cpp(module)
@@ -178,13 +177,14 @@ class LoweringPipeline:
         privateuse.add_specialize_kernel(pm, constants, [int(dim) for dim in grid])
         passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_canonicalizer(pm)
-        privateuse.add_analyze_access(pm)
         privateuse.add_lower_structured_access(pm)
         privateuse.add_lower_unstructured_access(pm)
         privateuse.add_ptr_to_memref(pm)
         passes.common.add_canonicalizer(pm)
         privateuse.add_arith_to_linalg(pm)
         privateuse.add_pid_loop(pm, self.num_pids)
+        passes.common.add_licm(pm)
+        privateuse.add_hoist_invariant_staging(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         pm.run(module, 'specialize_kernel')
@@ -198,13 +198,6 @@ class LoweringPipeline:
         privateuse.add_bufferize(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(module, 'fuse_and_bufferize')
-        return module
-
-    def _software_pipeline(self, module):
-        pm = ir.pass_manager(module.context)
-        pm.enable_debug()
-        privateuse.add_analyze_dataflow(pm)
-        pm.run(module, 'dataflow_analysis')
         return module
 
     def _transform(self, module):

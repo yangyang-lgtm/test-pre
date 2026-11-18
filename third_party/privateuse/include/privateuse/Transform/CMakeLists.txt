@@ -1,4 +1,5 @@
 add_subdirectory(CollapseShape)
+add_subdirectory(HoistInvariantStaging)
 add_subdirectory(LinalgToRuntimeCall)
 add_subdirectory(LowerLinalgReduce)
 add_subdirectory(OutlineLinalgOps)

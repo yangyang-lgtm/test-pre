@@ -9,6 +9,7 @@
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
 #include "privateuse/Dialect/Puc/IR/PucDialect.h"
 #include "privateuse/Transform/CollapseShape/Passes.h"
+#include "privateuse/Transform/HoistInvariantStaging/Passes.h"
 #include "privateuse/Transform/LinalgToRuntimeCall/Passes.h"
 #include "privateuse/Transform/LowerLinalgReduce/Passes.h"
 #include "privateuse/Transform/OutlineLinalgOps/Passes.h"
@@ -20,7 +21,6 @@
 #include "privateuse/Transform/SinkConstantCallArgs/Passes.h"
 #include "privateuse/Transform/SpecializeKernel/SpecializeKernel.h"
 #include "privateuse/Utils/AccessAnalysis/Passes.h"
-#include "privateuse/Utils/DataflowAnalysis/Passes.h"
 #include "privateuse/PucTranslate/PucTranslate.h"
 
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
@@ -110,13 +110,15 @@ void init_triton_privateuse(py::module_& m)
   );
 
   m.def("add_analyze_access", [](PassManager& pm) { pm.addPass(triton::createAnalyzeAccessPass()); }, py::arg("pm"));
-  m.def(
-    "add_analyze_dataflow", [](PassManager& pm) { pm.addPass(triton::createAnalyzeDataflowPass()); }, py::arg("pm")
-  );
 
   m.def(
     "add_pid_loop", [](PassManager& pm, int64_t numPids) { pm.addPass(triton::createPidLoopPass(numPids)); },
     py::arg("pm"), py::arg("num_pids")
+  );
+
+  m.def(
+    "add_hoist_invariant_staging", [](PassManager& pm) { pm.addPass(triton::createHoistInvariantStagingPass()); },
+    py::arg("pm")
   );
 
   m.def(
