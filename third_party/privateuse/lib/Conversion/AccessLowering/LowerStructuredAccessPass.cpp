@@ -10,6 +10,7 @@
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -223,7 +224,17 @@ private:
     if (masked) {
       Value fillValue = triton::maskedFillValue(load, elementType, builder, loc);
       if (!fillValue) return failure();
-      linalg::FillOp::create(builder, loc, ValueRange{fillValue}, ValueRange{buf});
+      Value anyPartial = arith::ConstantOp::create(builder, loc, builder.getBoolAttr(false));
+      for (auto [d, dimSize] : llvm::enumerate(tensorType.getShape())) {
+        if (!dimSizes[d]) continue;
+        Value full = arith::ConstantIndexOp::create(builder, loc, dimSize);
+        Value cmp  = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::slt, dimSizes[d], full);
+        anyPartial = arith::OrIOp::create(builder, loc, anyPartial, cmp);
+      }
+      scf::IfOp::create(builder, loc, anyPartial, [&](OpBuilder& b, Location l) {
+        linalg::FillOp::create(b, l, ValueRange{fillValue}, ValueRange{buf});
+        scf::YieldOp::create(b, l);
+      });
       dst = createBufferWindow(builder, loc, buf, tensorType.getShape(), dimSizes);
     }
     memref::CopyOp::create(builder, loc, *view, dst);
@@ -284,6 +295,7 @@ struct LowerStructuredAccessPass : public ::impl::LowerStructuredAccessBase<Lowe
       bufferization::BufferizationDialect,
       linalg::LinalgDialect,
       memref::MemRefDialect,
+      scf::SCFDialect,
       tensor::TensorDialect
     >();
     // clang-format on
