@@ -4,10 +4,9 @@
 include "mlir/Pass/PassBase.td"
 
 def PidLoop : Pass<"privateuse-pid-loop", "mlir::ModuleOp"> {
-  let summary = "Turn the program ids of a kernel into a loop over physical threads";
+  let summary = "Map program ids onto physical threads";
   let description = [{
-    Wraps the body of every public kernel in a grid-stride loop over the
-    linear program id:
+    Maps the program ids of every public kernel onto the physical threads:
 
       %tid = pumem.get_physical_id
       scf.for %l = %tid to %total step num_pids {
@@ -20,6 +19,11 @@ def PidLoop : Pass<"privateuse-pid-loop", "mlir::ModuleOp"> {
     program id never leaves: a one-dimensional grid keeps x = %l, a grid
     without a z axis has y = %l / nx, and z is zero. num_pids is the number
     of physical threads and becomes the loop step.
+
+    When the grid has exactly num_pids blocks every thread runs the body
+    once, so the loop is elided and the body is inlined with %tid as the
+    linear program id. When the grid has fewer blocks, the loop is replaced
+    by scf.if %tid < total so threads without a block skip the body.
 
     Kernels are the public, non-external functions with a single block and no
     results; private helpers are left untouched.
