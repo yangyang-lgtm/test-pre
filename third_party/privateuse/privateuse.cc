@@ -23,6 +23,7 @@
 #include "privateuse/Utils/AccessAnalysis/Passes.h"
 #include "privateuse/PucTranslate/PucTranslate.h"
 
+#include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -181,6 +182,8 @@ void init_triton_privateuse(py::module_& m)
   );
 
   m.def("add_memref_expand", [](PassManager& pm) { pm.addPass(memref::createExpandOpsPass()); }, py::arg("pm"));
+
+  m.def("add_lower_affine", [](PassManager& pm) { pm.addPass(mlir::createLowerAffinePass()); }, py::arg("pm"));
 
   m.def("add_memref_to_pumem", [](PassManager& pm) { pm.addPass(triton::createMemrefToPumemPass()); }, py::arg("pm"));
 

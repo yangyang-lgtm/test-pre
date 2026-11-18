@@ -38,5 +38,6 @@ add_triton_plugin(TritonPrivateUse ${CMAKE_CURRENT_SOURCE_DIR}/privateuse.cc LIN
   MLIRLinalgDialect
   MLIRTensorDialect
   MLIRAffineDialect
+  MLIRAffineToStandard
 )
 target_link_libraries(TritonPrivateUse PRIVATE Python3::Module nanobind-static)

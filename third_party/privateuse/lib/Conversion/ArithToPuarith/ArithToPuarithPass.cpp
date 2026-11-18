@@ -33,14 +33,10 @@ static Attribute convertAttr(Attribute attr)
   MLIRContext* ctx = attr.getContext();
   return TypeSwitch<Attribute, Attribute>(attr)
     .Case([&](arith::FastMathFlagsAttr a) {
-      return puarith::FastMathFlagsAttr::get(
-        ctx, static_cast<puarith::FastMathFlags>(a.getValue())
-      );
+      return puarith::FastMathFlagsAttr::get(ctx, static_cast<puarith::FastMathFlags>(a.getValue()));
     })
     .Case([&](arith::IntegerOverflowFlagsAttr a) {
-      return puarith::IntegerOverflowFlagsAttr::get(
-        ctx, static_cast<puarith::IntegerOverflowFlags>(a.getValue())
-      );
+      return puarith::IntegerOverflowFlagsAttr::get(ctx, static_cast<puarith::IntegerOverflowFlags>(a.getValue()));
     })
     .Default([](Attribute a) { return a; });
 }
@@ -119,8 +115,8 @@ struct TruncIToAndI1Conversion : public OpConversionPattern<arith::TruncIOp>
       one = cast<TypedAttr>(oneElem);
     auto oneCst = puarith::ConstantOp::create(rewriter, op.getLoc(), one);
 
-    auto lowBit = puarith::AndIOp::create(rewriter, op.getLoc(), adaptor.getIn(), oneCst.getResult());
-    rewriter.replaceOpWithNewOp<puarith::TruncIOp>(op, resTy, lowBit.getResult());
+    auto lowBit = puarith::AndIOp::create(rewriter, op.getLoc(), adaptor.getIn(), oneCst);
+    rewriter.replaceOpWithNewOp<puarith::TruncIOp>(op, resTy, lowBit);
     return success();
   }
 };
@@ -177,9 +173,7 @@ private:
     MLIRContext* ctx = attr.getContext();
     return TypeSwitch<Attribute, Attribute>(attr)
       .Case([&](arith::FastMathFlagsAttr a) {
-        return puarith::FastMathFlagsAttr::get(
-          ctx, static_cast<puarith::FastMathFlags>(a.getValue())
-        );
+        return puarith::FastMathFlagsAttr::get(ctx, static_cast<puarith::FastMathFlags>(a.getValue()));
       })
       .Default([](Attribute a) { return a; });
   }

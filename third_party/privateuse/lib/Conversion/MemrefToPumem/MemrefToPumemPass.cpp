@@ -121,8 +121,7 @@ Value materializeElementPtr(OpBuilder& builder, Location loc, const MemRefParts&
   Value offset = parts.offset;
   if (!indices.empty())
     for (auto [index, stride] : llvm::zip_equal(indices, parts.strides))
-      offset =
-        arith::AddIOp::create(builder, loc, offset, arith::MulIOp::create(builder, loc, index, stride).getResult());
+      offset = arith::AddIOp::create(builder, loc, offset, arith::MulIOp::create(builder, loc, index, stride));
   if (indices.empty()) {
     if (auto constant = getConstantIntValue(offset); constant && *constant == 0) return parts.base;
   }
@@ -260,9 +259,7 @@ public:
     Value elements = constantIndex(rewriter, loc, 1 + staticOffset);
     for (auto [size, stride] : llvm::zip_equal(sizes, strides)) {
       Value extent = arith::SubIOp::create(rewriter, loc, size, constantIndex(rewriter, loc, 1));
-      elements     = arith::AddIOp::create(
-        rewriter, loc, elements, arith::MulIOp::create(rewriter, loc, extent, stride).getResult()
-      );
+      elements = arith::AddIOp::create(rewriter, loc, elements, arith::MulIOp::create(rewriter, loc, extent, stride));
     }
     elements = arith::MulIOp::create(rewriter, loc, elements, constantIndex(rewriter, loc, *elementBytes));
 

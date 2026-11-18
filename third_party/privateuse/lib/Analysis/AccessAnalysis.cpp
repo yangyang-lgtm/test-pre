@@ -779,6 +779,7 @@ FailureOr<AccessView> AccessAnalyzer::buildValue(Value value)
   if (auto expand = dyn_cast<ExpandDimsOp>(def)) return buildExpandDims(expand, shape);
   if (auto broadcast = dyn_cast<BroadcastOp>(def)) return buildBroadcast(broadcast, shape);
   if (auto reshape = dyn_cast<ReshapeOp>(def)) return buildReshape(reshape, shape);
+
   if (auto add = dyn_cast<AddPtrOp>(def))
     return combineValues(add.getPtr(), add.getOffset(), /*subtract=*/false, value);
   if (auto add = dyn_cast<arith::AddIOp>(def))
