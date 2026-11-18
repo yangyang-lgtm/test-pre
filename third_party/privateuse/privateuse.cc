@@ -12,13 +12,13 @@
 #include "privateuse/Dialect/PuStream/IR/PuStreamDialect.h"
 #include "privateuse/Dialect/Puc/IR/PucDialect.h"
 #include "privateuse/Transform/CollapseShape/Passes.h"
-#include "privateuse/Transform/HoistInvariantStaging/Passes.h"
 #include "privateuse/Transform/LowerLinalgReduce/Passes.h"
 #include "privateuse/Transform/PidLoop/Passes.h"
 #include "privateuse/Transform/PucLaunchKernel/Passes.h"
 #include "privateuse/Transform/PucLocalizeCarried/PucLocalizeCarried.h"
 #include "privateuse/Transform/PucSimplifyAssign/PucSimplifyAssign.h"
 #include "privateuse/Transform/PucVoidPtrArgs/PucVoidPtrArgs.h"
+#include "privateuse/Transform/ScheduleTimepoints/Passes.h"
 #include "privateuse/Transform/SinkConstantCallArgs/Passes.h"
 #include "privateuse/Transform/SpecializeKernel/SpecializeKernel.h"
 #include "privateuse/Utils/AccessAnalysis/Passes.h"
@@ -120,11 +120,6 @@ void init_triton_privateuse(py::module_& m)
   );
 
   m.def(
-    "add_hoist_invariant_staging", [](PassManager& pm) { pm.addPass(triton::createHoistInvariantStagingPass()); },
-    py::arg("pm")
-  );
-
-  m.def(
     "add_empty_tensor_to_alloc_tensor",
     [](PassManager& pm) { pm.addPass(bufferization::createEmptyTensorToAllocTensorPass()); }, py::arg("pm")
   );
@@ -158,6 +153,11 @@ void init_triton_privateuse(py::module_& m)
   );
 
   m.def("add_to_pustream", [](PassManager& pm) { pm.addPass(triton::createToPuStreamPass()); }, py::arg("pm"));
+
+  m.def(
+    "add_schedule_timepoints", [](PassManager& pm) { pm.addPass(triton::createScheduleTimepointsPass()); },
+    py::arg("pm")
+  );
 
   m.def(
     "add_lower_linalg_reduce", [](PassManager& pm) { pm.addPass(triton::createLowerLinalgReducePass()); }, py::arg("pm")

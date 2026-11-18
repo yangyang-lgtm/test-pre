@@ -207,6 +207,7 @@ class LoweringPipeline:
         pm.enable_debug()
         privateuse.add_to_pustream(pm)
         privateuse.add_outline_to_dispatch(pm, self.outlined_attr)
+        privateuse.add_schedule_timepoints(pm)
         pm.run(module, 'lower_to_stream')
         return module
 

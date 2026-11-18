@@ -36,6 +36,7 @@ struct BufferizePass : public ::impl::BufferizeBase<BufferizePass>
     bufferization::OneShotBufferizationOptions options;
     options.allowUnknownOps            = true;
     options.allowReturnAllocsFromLoops = true;
+    options.copyBeforeWrite            = true;
     options.bufferAlignment            = static_cast<unsigned>(kDefaultAlignment);
     options.defaultMemorySpaceFn       = [](bufferization::TensorLikeType type) -> std::optional<Attribute> {
       return IntegerAttr::get(IntegerType::get(type.getContext(), 64), kSramSpace);
