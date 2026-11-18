@@ -132,6 +132,9 @@ class LoweringPipeline:
         module = self._parse_ir(kernel_ir)
         module = self._specialize(module, grid, constants)
         module = self._fuse_and_bufferize(module)
+        print(module)
+        module = self._lower_to_stream(module)
+        print(module)
         module = self._transform(module)
         module = self._lower_to_pumem(module)
         cpp = self._emit_cpp(module)
@@ -184,7 +187,6 @@ class LoweringPipeline:
         privateuse.add_arith_to_linalg(pm)
         privateuse.add_pid_loop(pm, self.num_pids)
         passes.common.add_licm(pm)
-        privateuse.add_hoist_invariant_staging(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         pm.run(module, 'specialize_kernel')
@@ -200,11 +202,17 @@ class LoweringPipeline:
         pm.run(module, 'fuse_and_bufferize')
         return module
 
+    def _lower_to_stream(self, module):
+        pm = ir.pass_manager(module.context)
+        pm.enable_debug()
+        privateuse.add_to_pustream(pm)
+        privateuse.add_outline_to_dispatch(pm, self.outlined_attr)
+        pm.run(module, 'lower_to_stream')
+        return module
+
     def _transform(self, module):
         pm = ir.pass_manager(module.context)
         pm.enable_debug()
-        privateuse.add_linalg_to_runtime_call(pm)
-        privateuse.add_outline_linalg_ops(pm, self.outlined_attr)
         privateuse.add_lower_linalg_reduce(pm)
         privateuse.add_convert_linalg_to_loops(pm)
         passes.common.add_canonicalizer(pm)

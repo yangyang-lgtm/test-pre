@@ -1,8 +1,8 @@
-add_triton_library(LinalgToRuntimeCall
-  LinalgToRuntimeCallPass.cpp
+add_triton_library(ToPuStream
+  ToPuStreamPass.cpp
 
   DEPENDS
-  LinalgToRuntimeCallTransformPassIncGen
+  ToPuStreamConversionPassIncGen
 
   LINK_LIBS PUBLIC
   MLIRArithDialect
@@ -11,5 +11,5 @@ add_triton_library(LinalgToRuntimeCall
   MLIRMemRefDialect
   MLIRPass
   MLIRTransforms
-  PUMemIR
+  PuStreamIR
 )

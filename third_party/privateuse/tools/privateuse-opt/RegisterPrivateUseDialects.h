@@ -42,16 +42,17 @@
 #include "privateuse/Conversion/Bufferize/Passes.h"
 #include "privateuse/Conversion/MathToPumath/Passes.h"
 #include "privateuse/Conversion/MemrefToPumem/Passes.h"
+#include "privateuse/Conversion/ToPuStream/Passes.h"
 #include "privateuse/Conversion/ScfToPumem/Passes.h"
+#include "privateuse/Transform/OutlineToDispatch/Passes.h"
 #include "privateuse/Conversion/ToPuc/Passes.h"
 #include "privateuse/Dialect/PuArith/IR/PuArithDialect.h"
 #include "privateuse/Dialect/PuMath/IR/PuMathDialect.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
+#include "privateuse/Dialect/PuStream/IR/PuStreamDialect.h"
 #include "privateuse/Dialect/Puc/IR/PucDialect.h"
 #include "privateuse/Transform/HoistInvariantStaging/Passes.h"
-#include "privateuse/Transform/LinalgToRuntimeCall/Passes.h"
 #include "privateuse/Transform/LowerLinalgReduce/Passes.h"
-#include "privateuse/Transform/OutlineLinalgOps/Passes.h"
 #include "privateuse/Transform/PidLoop/Passes.h"
 #include "privateuse/Transform/PucLaunchKernel/Passes.h"
 #include "privateuse/Transform/PucLocalizeCarried/Passes.h"
@@ -91,11 +92,11 @@ inline void registerPrivateUseDialects(mlir::DialectRegistry& registry)
   mlir::triton::registerMathToPumathPass();
   mlir::triton::registerMemrefToPumemPasses();
   mlir::triton::registerScfToPumemPass();
+  mlir::triton::registerToPuStreamPasses();
+  mlir::triton::registerOutlineToDispatchPasses();
   mlir::triton::registerToPucPasses();
   mlir::triton::registerHoistInvariantStagingPasses();
-  mlir::triton::registerLinalgToRuntimeCallPasses();
   mlir::triton::registerLowerLinalgReducePasses();
-  mlir::triton::registerOutlineLinalgOpsPasses();
   mlir::triton::registerPidLoopPasses();
   mlir::triton::registerPucLaunchKernelPasses();
   mlir::triton::registerPucLocalizeCarriedPass();
@@ -108,6 +109,7 @@ inline void registerPrivateUseDialects(mlir::DialectRegistry& registry)
       mlir::pumem::PUMemDialect,
       mlir::puarith::PuArithDialect,
       mlir::pumath::PuMathDialect,
+      mlir::pustream::PuStreamDialect,
       mlir::puc::PucDialect,
       mlir::ptr::PtrDialect,
       mlir::affine::AffineDialect,

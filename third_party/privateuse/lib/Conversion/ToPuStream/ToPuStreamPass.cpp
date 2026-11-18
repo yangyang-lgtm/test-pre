@@ -1,4 +1,4 @@
-#include "privateuse/Transform/LinalgToRuntimeCall/Passes.h"
+#include "privateuse/Conversion/ToPuStream/Passes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
@@ -7,15 +7,15 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
+#include "privateuse/Dialect/PuStream/IR/PuStreamDialect.h"
 
 #include "llvm/ADT/STLFunctionalExtras.h"
 
-#define GEN_PASS_DECL_LINALGTORUNTIMECALL
-#include "privateuse/Transform/LinalgToRuntimeCall/Passes.h.inc"
+#define GEN_PASS_DECL_TOPUSTREAM
+#include "privateuse/Conversion/ToPuStream/Passes.h.inc"
 
-#define GEN_PASS_DEF_LINALGTORUNTIMECALL
-#include "privateuse/Transform/LinalgToRuntimeCall/Passes.h.inc"
+#define GEN_PASS_DEF_TOPUSTREAM
+#include "privateuse/Conversion/ToPuStream/Passes.h.inc"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -37,14 +37,26 @@ FailureOr<SmallVector<MemRefType>> checkMemrefOperands(
   return types;
 }
 
-struct MatmulToRuntimeCallPattern : OpRewritePattern<linalg::MatmulOp>
+void replaceWithDispatch(
+  PatternRewriter& rewriter, Operation* op, StringRef callee, ArrayAttr templateArgs, ArrayRef<int64_t> reads,
+  ArrayRef<int64_t> writes
+)
+{
+  pustream::AsyncDispatchOp::create(
+    rewriter, op->getLoc(), pustream::TimepointType::get(rewriter.getContext()), callee, templateArgs,
+    op->getOperands(), /*awaits=*/ValueRange{}, reads, writes
+  );
+  rewriter.eraseOp(op);
+}
+
+struct MatmulToDispatchPattern : OpRewritePattern<linalg::MatmulOp>
 {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(linalg::MatmulOp op, PatternRewriter& rewriter) const override
   {
     auto fail = [&](const Twine& reason) -> LogicalResult {
-      return op.emitError("cannot lower linalg.matmul to a runtime call: ") << reason;
+      return op.emitError("cannot lower linalg.matmul to a runtime dispatch: ") << reason;
     };
     auto check = [&](MemRefType type, ArrayRef<MemRefType> previous) -> LogicalResult {
       if (!type.hasStaticShape()) return fail("expected statically shaped operands");
@@ -66,24 +78,23 @@ struct MatmulToRuntimeCallPattern : OpRewritePattern<linalg::MatmulOp>
     if (bTy.getShape()[0] != K) return fail("expected lhs shape [M, K] and rhs shape [K, N]");
     if (cTy.getShape() != ArrayRef<int64_t>{M, N}) return fail("expected init shape to match the result shape");
 
-    auto name         = FlatSymbolRefAttr::get(op.getContext(), "runtime_matmul");
     auto templateArgs = rewriter.getArrayAttr(
       {TypeAttr::get(aTy.getElementType()), rewriter.getIndexAttr(M), rewriter.getIndexAttr(N), rewriter.getIndexAttr(K)
       }
     );
-    rewriter.replaceOpWithNewOp<pumem::RuntimeCallOp>(op, TypeRange{}, name, templateArgs, op->getOperands());
+    replaceWithDispatch(rewriter, op, "runtime_matmul", templateArgs, /*reads=*/{0, 1, 2}, /*writes=*/{2});
     return success();
   }
 };
 
-struct TransposeToRuntimeCallPattern : OpRewritePattern<linalg::TransposeOp>
+struct TransposeToDispatchPattern : OpRewritePattern<linalg::TransposeOp>
 {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(linalg::TransposeOp op, PatternRewriter& rewriter) const override
   {
     auto fail = [&](const Twine& reason) -> LogicalResult {
-      return op.emitError("cannot lower linalg.transpose to a runtime call: ") << reason;
+      return op.emitError("cannot lower linalg.transpose to a runtime dispatch: ") << reason;
     };
     auto check = [&](MemRefType type, ArrayRef<MemRefType> previous) -> LogicalResult {
       if (!type.hasStaticShape()) return fail("expected statically shaped operands");
@@ -108,39 +119,63 @@ struct TransposeToRuntimeCallPattern : OpRewritePattern<linalg::TransposeOp>
     if (dstTy.getShape() != ArrayRef<int64_t>{cols, rows})
       return fail("expected init shape to be the transposed input shape");
 
-    auto name         = FlatSymbolRefAttr::get(op.getContext(), "runtime_transpose");
     auto templateArgs = rewriter.getArrayAttr(
       {TypeAttr::get(srcTy.getElementType()), rewriter.getIndexAttr(rows), rewriter.getIndexAttr(cols)}
     );
-    rewriter.replaceOpWithNewOp<pumem::RuntimeCallOp>(op, TypeRange{}, name, templateArgs, op->getOperands());
+    replaceWithDispatch(rewriter, op, "runtime_transpose", templateArgs, /*reads=*/{0, 1}, /*writes=*/{1});
     return success();
   }
 };
 
-struct LinalgToRuntimeCallPass : public ::impl::LinalgToRuntimeCallBase<LinalgToRuntimeCallPass>
+struct CopyToAsyncPattern : OpRewritePattern<memref::CopyOp>
 {
-  using LinalgToRuntimeCallBase::LinalgToRuntimeCallBase;
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(memref::CopyOp op, PatternRewriter& rewriter) const override
+  {
+    auto source = dyn_cast<MemRefType>(op.getSource().getType());
+    auto target = dyn_cast<MemRefType>(op.getTarget().getType());
+    if (!source || !target)
+      return op.emitError("cannot lower memref.copy to an async copy: expected ranked memref operands");
+
+    pustream::AsyncCopyOp::create(
+      rewriter, op.getLoc(), pustream::TimepointType::get(rewriter.getContext()), op.getSource(), op.getTarget(),
+      /*awaits=*/ValueRange{}
+    );
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct ToPuStreamPass : public ::impl::ToPuStreamBase<ToPuStreamPass>
+{
+  using ToPuStreamBase::ToPuStreamBase;
 
   void getDependentDialects(DialectRegistry& registry) const override
   {
-    registry.insert<arith::ArithDialect, linalg::LinalgDialect, pumem::PUMemDialect>();
+    registry.insert<arith::ArithDialect, linalg::LinalgDialect, memref::MemRefDialect, pustream::PuStreamDialect>();
   }
 
   void runOnOperation() override
   {
     ConversionTarget target(getContext());
-    target.addLegalDialect<arith::ArithDialect, pumem::PUMemDialect>();
+    target.addLegalDialect<arith::ArithDialect, pustream::PuStreamDialect>();
     target.addIllegalOp<linalg::MatmulOp, linalg::TransposeOp>();
+    target.addDynamicallyLegalOp<memref::CopyOp>([](memref::CopyOp copy) {
+      auto source = dyn_cast<MemRefType>(copy.getSource().getType());
+      auto target = dyn_cast<MemRefType>(copy.getTarget().getType());
+      return source && target && source.getMemorySpace() == target.getMemorySpace();
+    });
 
     RewritePatternSet patterns(&getContext());
-    patterns.add<MatmulToRuntimeCallPattern, TransposeToRuntimeCallPattern>(&getContext());
+    patterns.add<MatmulToDispatchPattern, TransposeToDispatchPattern, CopyToAsyncPattern>(&getContext());
     if (failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) signalPassFailure();
   }
 };
 
 } // namespace
 
-std::unique_ptr<OperationPass<ModuleOp>> triton::createLinalgToRuntimeCallPass()
+std::unique_ptr<OperationPass<ModuleOp>> triton::createToPuStreamPass()
 {
-  return std::make_unique<LinalgToRuntimeCallPass>();
+  return std::make_unique<ToPuStreamPass>();
 }
