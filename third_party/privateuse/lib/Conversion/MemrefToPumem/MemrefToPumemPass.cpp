@@ -806,121 +806,6 @@ public:
   }
 };
 
-enum class EntryArgKind {
-  Keep,
-  Constant,
-  DropIfUnused,
-};
-
-struct EntryArg
-{
-  EntryArgKind kind;
-  int64_t value;
-};
-
-using EntryConstants = llvm::DenseMap<StringAttr, SmallVector<EntryArg>>;
-
-EntryArg entryConstant(int64_t value)
-{
-  if (value == ShapedType::kDynamic) return {EntryArgKind::DropIfUnused, 0};
-  return {EntryArgKind::Constant, value};
-}
-
-EntryConstants collectEntryConstants(ModuleOp module)
-{
-  EntryConstants constants;
-  module.walk([&](triton::FuncOp func) {
-    if (!func.isPublic() || func.isExternal()) return;
-    std::optional<SymbolTable::UseRange> uses = SymbolTable::getSymbolUses(func, module);
-    if (!uses || !uses->empty()) return;
-
-    SmallVector<EntryArg> values;
-    for (Type input : cast<FunctionType>(func.getFunctionType()).getInputs()) {
-      auto type = dyn_cast<MemRefType>(input);
-      SmallVector<int64_t> strides;
-      int64_t offset = ShapedType::kDynamic;
-      if (!type || failed(type.getStridesAndOffset(strides, offset))) {
-        values.push_back({EntryArgKind::Keep, 0});
-        continue;
-      }
-      values.push_back({EntryArgKind::Keep, 0});
-      values.push_back(entryConstant(offset));
-      values.append(type.getRank(), {EntryArgKind::DropIfUnused, 0});
-      for (int64_t stride : strides) values.push_back(entryConstant(stride));
-    }
-    constants[func.getNameAttr()] = std::move(values);
-  });
-  return constants;
-}
-
-LogicalResult foldEntryConstants(ModuleOp module, const EntryConstants& constants)
-{
-  WalkResult result = module.walk([&](func::FuncOp func) -> WalkResult {
-    auto it = constants.find(func.getNameAttr());
-    if (it == constants.end()) return WalkResult::advance();
-    if (it->second.size() != func.getNumArguments())
-      return func->emitError("kernel signature does not match the entry memref descriptors");
-
-    Block& body = func.getBody().front();
-    OpBuilder builder(&body, body.begin());
-    llvm::BitVector dead(func.getNumArguments());
-    for (auto [index, entry] : llvm::enumerate(it->second)) {
-      Value argument = func.getArgument(index);
-      switch (entry.kind) {
-        case EntryArgKind::Keep: break;
-        case EntryArgKind::Constant:
-          argument.replaceAllUsesWith(constantIndex(builder, func.getLoc(), entry.value));
-          dead.set(index);
-          break;
-        case EntryArgKind::DropIfUnused:
-          if (argument.use_empty()) dead.set(index);
-          break;
-      }
-    }
-    if (dead.none()) return WalkResult::advance();
-    if (failed(func.eraseArguments(dead))) return func->emitError("failed to erase descriptor arguments");
-    return WalkResult::advance();
-  });
-  return failure(result.wasInterrupted());
-}
-
-LogicalResult eraseDeadArguments(ModuleOp module)
-{
-  struct Update
-  {
-    func::FuncOp func;
-    llvm::BitVector dead;
-  };
-  SmallVector<Update> updates;
-  module.walk([&](func::FuncOp func) {
-    if (func.isExternal() || func.isPublic()) return;
-    llvm::BitVector dead(func.getNumArguments());
-    for (auto [i, arg] : llvm::enumerate(func.getArguments()))
-      if (arg.use_empty()) dead.set(i);
-    if (dead.none()) return;
-    std::optional<SymbolTable::UseRange> uses = SymbolTable::getSymbolUses(func, module);
-    if (!uses) return;
-    for (SymbolTable::SymbolUse use : *uses)
-      if (!isa<func::CallOp>(use.getUser())) return;
-    updates.push_back({func, dead});
-  });
-
-  for (Update& update : updates) {
-    std::optional<SymbolTable::UseRange> uses = SymbolTable::getSymbolUses(update.func, module);
-    if (!uses) return update.func->emitError("lost the symbol uses of a private function");
-    for (SymbolTable::SymbolUse use : *uses) {
-      auto call = cast<func::CallOp>(use.getUser());
-      SmallVector<Value> operands;
-      for (auto [i, operand] : llvm::enumerate(call.getOperands()))
-        if (!update.dead.test(i)) operands.push_back(operand);
-      call.getOperandsMutable().assign(operands);
-    }
-    if (failed(update.func.eraseArguments(update.dead)))
-      return update.func->emitError("failed to erase dead arguments");
-  }
-  return success();
-}
-
 class SlotOpLowering : public OpConversionPattern<pustream::SlotOp>
 {
 public:
@@ -1100,6 +985,26 @@ public:
   }
 };
 
+enum class EntryArgKind {
+  Keep,
+  Constant,
+  DropIfUnused,
+};
+
+struct EntryArg
+{
+  EntryArgKind kind;
+  int64_t value;
+};
+
+using EntryConstants = llvm::DenseMap<StringAttr, SmallVector<EntryArg>>;
+
+EntryArg entryConstant(int64_t value)
+{
+  if (value == ShapedType::kDynamic) return {EntryArgKind::DropIfUnused, 0};
+  return {EntryArgKind::Constant, value};
+}
+
 struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
 {
   using MemrefToPumemBase::MemrefToPumemBase;
@@ -1109,7 +1014,7 @@ struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
     ModuleOp module = getOperation();
     if (failed(checkPreconditions(module))) return signalPassFailure();
 
-    EntryConstants entryConstants = collectEntryConstants(module);
+    EntryConstants entryConstants = collectEntryConstants();
     MemRefTupleTypeConverter converter;
     ConversionTarget target(getContext());
 
@@ -1150,9 +1055,109 @@ struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
 
     if (failed(applyPartialConversion(module, target, std::move(patterns)))) return signalPassFailure();
 
-    if (failed(foldEntryConstants(module, entryConstants))) signalPassFailure();
-    if (failed(eraseDeadArguments(module))) signalPassFailure();
+    if (failed(foldEntryConstants(entryConstants))) signalPassFailure();
+    if (failed(eraseDeadArguments())) signalPassFailure();
   }
+
+private:
+  EntryConstants collectEntryConstants()
+  {
+    ModuleOp module = getOperation();
+    EntryConstants constants;
+    module.walk([&](triton::FuncOp func) {
+      if (!func.isPublic() || func.isExternal()) return;
+      std::optional<SymbolTable::UseRange> uses = SymbolTable::getSymbolUses(func, module);
+      if (!uses || !uses->empty()) return;
+
+      SmallVector<EntryArg> values;
+      for (Type input : cast<FunctionType>(func.getFunctionType()).getInputs()) {
+        auto type = dyn_cast<MemRefType>(input);
+        SmallVector<int64_t> strides;
+        int64_t offset = ShapedType::kDynamic;
+        if (!type || failed(type.getStridesAndOffset(strides, offset))) {
+          values.push_back({EntryArgKind::Keep, 0});
+          continue;
+        }
+        values.push_back({EntryArgKind::Keep, 0});
+        values.push_back(entryConstant(offset));
+        values.append(type.getRank(), {EntryArgKind::DropIfUnused, 0});
+        for (int64_t stride : strides) values.push_back(entryConstant(stride));
+      }
+      constants[func.getNameAttr()] = std::move(values);
+    });
+    return constants;
+  }
+
+  LogicalResult foldEntryConstants(const EntryConstants& constants)
+  {
+    ModuleOp module = getOperation();
+    WalkResult result = module.walk([&](func::FuncOp func) -> WalkResult {
+      auto it = constants.find(func.getNameAttr());
+      if (it == constants.end()) return WalkResult::advance();
+      if (it->second.size() != func.getNumArguments())
+        return func->emitError("kernel signature does not match the entry memref descriptors");
+
+      Block& body = func.getBody().front();
+      OpBuilder builder(&body, body.begin());
+      llvm::BitVector dead(func.getNumArguments());
+      for (auto [index, entry] : llvm::enumerate(it->second)) {
+        Value argument = func.getArgument(index);
+        switch (entry.kind) {
+          case EntryArgKind::Keep: break;
+          case EntryArgKind::Constant:
+            argument.replaceAllUsesWith(constantIndex(builder, func.getLoc(), entry.value));
+            dead.set(index);
+            break;
+          case EntryArgKind::DropIfUnused:
+            if (argument.use_empty()) dead.set(index);
+            break;
+        }
+      }
+      if (dead.none()) return WalkResult::advance();
+      if (failed(func.eraseArguments(dead))) return func->emitError("failed to erase descriptor arguments");
+      return WalkResult::advance();
+    });
+    return failure(result.wasInterrupted());
+  }
+
+  LogicalResult eraseDeadArguments()
+  {
+    ModuleOp module = getOperation();
+    struct Update
+    {
+      func::FuncOp func;
+      llvm::BitVector dead;
+    };
+    SmallVector<Update> updates;
+    module.walk([&](func::FuncOp func) {
+      if (func.isExternal() || func.isPublic()) return;
+      llvm::BitVector dead(func.getNumArguments());
+      for (auto [i, arg] : llvm::enumerate(func.getArguments()))
+        if (arg.use_empty()) dead.set(i);
+      if (dead.none()) return;
+      std::optional<SymbolTable::UseRange> uses = SymbolTable::getSymbolUses(func, module);
+      if (!uses) return;
+      for (SymbolTable::SymbolUse use : *uses)
+        if (!isa<func::CallOp>(use.getUser())) return;
+      updates.push_back({func, dead});
+    });
+
+    for (Update& update : updates) {
+      std::optional<SymbolTable::UseRange> uses = SymbolTable::getSymbolUses(update.func, module);
+      if (!uses) return update.func->emitError("lost the symbol uses of a private function");
+      for (SymbolTable::SymbolUse use : *uses) {
+        auto call = cast<func::CallOp>(use.getUser());
+        SmallVector<Value> operands;
+        for (auto [i, operand] : llvm::enumerate(call.getOperands()))
+          if (!update.dead.test(i)) operands.push_back(operand);
+        call.getOperandsMutable().assign(operands);
+      }
+      if (failed(update.func.eraseArguments(update.dead)))
+        return update.func->emitError("failed to erase dead arguments");
+    }
+    return success();
+  }
+
 };
 
 } // namespace

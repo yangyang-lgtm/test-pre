@@ -75,19 +75,19 @@ inline void populateI1ToI8Patterns(RewritePatternSet& patterns, TypeConverter& t
 {
   // clang-format off
   patterns.add<
-      I1OpConversion<memref::AllocOp>,
-      I1OpConversion<memref::AllocaOp>,
-      I1OpConversion<memref::CastOp>,
-      I1OpConversion<memref::CopyOp>,
-      I1OpConversion<memref::DeallocOp>,
-      I1OpConversion<memref::LoadOp>,
-      I1OpConversion<memref::StoreOp>,
-      I1OpConversion<memref::ReinterpretCastOp>,
-      I1OpConversion<memref::SubViewOp>,
-      I1OpConversion<memref::CollapseShapeOp>,
-      I1OpConversion<memref::ExpandShapeOp>,
-      I1OpConversion<vector::TransferReadOp>,
-      I1OpConversion<vector::TransferWriteOp>
+    I1OpConversion<memref::AllocOp>,
+    I1OpConversion<memref::AllocaOp>,
+    I1OpConversion<memref::CastOp>,
+    I1OpConversion<memref::CopyOp>,
+    I1OpConversion<memref::DeallocOp>,
+    I1OpConversion<memref::LoadOp>,
+    I1OpConversion<memref::StoreOp>,
+    I1OpConversion<memref::ReinterpretCastOp>,
+    I1OpConversion<memref::SubViewOp>,
+    I1OpConversion<memref::CollapseShapeOp>,
+    I1OpConversion<memref::ExpandShapeOp>,
+    I1OpConversion<vector::TransferReadOp>,
+    I1OpConversion<vector::TransferWriteOp>
   >(typeConverter, patterns.getContext());
   // clang-format on
 
@@ -106,19 +106,19 @@ inline void markI1ToI8OpsDynamicallyLegal(ConversionTarget& target, TypeConverte
   auto legal = [&](Operation* op) { return typeConverter.isLegal(op); };
   // clang-format off
   target.addDynamicallyLegalOp<
-      memref::AllocOp,
-      memref::AllocaOp,
-      memref::CastOp,
-      memref::CopyOp,
-      memref::DeallocOp,
-      memref::LoadOp,
-      memref::StoreOp,
-      memref::ReinterpretCastOp,
-      memref::SubViewOp,
-      memref::CollapseShapeOp,
-      memref::ExpandShapeOp,
-      vector::TransferReadOp,
-      vector::TransferWriteOp
+    memref::AllocOp,
+    memref::AllocaOp,
+    memref::CastOp,
+    memref::CopyOp,
+    memref::DeallocOp,
+    memref::LoadOp,
+    memref::StoreOp,
+    memref::ReinterpretCastOp,
+    memref::SubViewOp,
+    memref::CollapseShapeOp,
+    memref::ExpandShapeOp,
+    vector::TransferReadOp,
+    vector::TransferWriteOp
   >(legal);
   // clang-format on
 }

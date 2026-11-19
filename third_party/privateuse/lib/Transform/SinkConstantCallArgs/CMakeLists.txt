@@ -9,4 +9,5 @@ add_triton_library(SinkConstantCallArgs
   MLIRFunctionInterfaces
   MLIRIR
   MLIRPass
+  PUMemIR
 )
