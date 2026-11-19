@@ -14,36 +14,6 @@
 #include <thread>
 #include <vector>
 
-// Execution model -- one issuing core, three executors, and no device-side
-// dependency edge between executors (docs/pustream-v3-design.md section 0):
-//
-//   host thread       issues in program order and blocks in pumem_wait*; it is
-//                     the only thing that orders work across executors
-//   load  executor    1 thread, FIFO of DRAM->SRAM copies
-//   store executor    1 thread, FIFO of SRAM->DRAM copies
-//   compute executor  one structure with W internal lanes (W = 2)
-//
-// Copies of the same direction are serialised by their executor, which is the
-// "global FIFO per direction" clause of the contract. No dependency graph
-// between tasks is needed and none is built: a copy of a given direction can
-// never run concurrently with another copy of the same direction, and compute
-// runs independently of both.
-//
-// The compute executive is a single structure -- it takes dispatches from one
-// queue, exposes no per-task completion value, and can only be drained as a
-// whole -- but that structure holds several lanes, so dispatches with no hazard
-// between them run concurrently. Design 7.2/9 rely on that (cmpf || mulf in one
-// barrier group, U dispatches before one barrier). PUMEM_COMPUTE_LANES overrides
-// the lane count; a single lane is stricter than the hardware and should only be
-// used to measure the pessimistic bound.
-//
-// pumem_wait_dispatch is therefore a barrier on the compute executor itself, not
-// a walk over issued tasks: the host snapshots the issue counter and waits until
-// that many dispatches have retired. It is O(1), allocates nothing, and is
-// idempotent.
-//
-// Threads are owned by ThreadGuard, which starts them on first use and joins them
-// in its destructor, so no shutdown path has to remember to tear down an executor.
 
 struct pumem_task
 {
@@ -62,9 +32,6 @@ struct Lane
   std::deque<pumem_task*> queue;
   bool stopping = false;
 
-  // One FIFO consumed by one or more executor lanes. A single consumer makes
-  // the queue itself the ordering primitive; several consumers make it an
-  // unordered pool, which is the shape of the compute executor.
   void push(pumem_task* task)
   {
     {
@@ -74,8 +41,6 @@ struct Lane
     cv.notify_one();
   }
 
-  // Returns nullptr once stopping and drained, so shutdown still finishes the
-  // work that was already accepted.
   pumem_task* pop()
   {
     std::unique_lock<std::mutex> lock(mutex);
@@ -138,9 +103,6 @@ struct Runtime
   std::condition_variable idle_cv;
   std::mutex idle_mutex;
 
-  // Compute barrier: issued - completed is the number of dispatches still in
-  // flight. pumem_wait_dispatch waits for that difference to close, so a task
-  // that retires early cannot retire somebody else's barrier.
   std::atomic<size_t> compute_issued{0};
   std::atomic<size_t> compute_completed{0};
   std::mutex compute_mutex;
@@ -148,8 +110,6 @@ struct Runtime
 
   std::mutex tasks_mutex;
   std::vector<std::unique_ptr<pumem_task>> tasks;
-
-  // Declared last so it is destroyed (and joins) before the lanes go away.
   ThreadGuard guard{load_lane, store_lane, compute_lane};
 };
 
@@ -167,8 +127,6 @@ void account_retired()
   }
 }
 
-// A DMA task is waited on by pumem_wait(handle), so it needs the wait/notify
-// pair; its metadata slot was already released by the task body.
 void retire_dma(pumem_task* task)
 {
   {
@@ -179,8 +137,6 @@ void retire_dma(pumem_task* task)
   account_retired();
 }
 
-// A dispatch has no per-task completion value: retiring one only advances the
-// compute executor's barrier counter.
 void retire_compute()
 {
   {
@@ -313,9 +269,6 @@ void pumem_wait(const pumem_dma_handle_t& handle)
   wait_task(handle.last_write.load(std::memory_order_acquire));
 }
 
-// Barrier on the compute executor itself: the host waits until every dispatch
-// issued before this call has retired. No per-task walk, no allocation, and
-// idempotent -- calling it twice costs one counter read the second time.
 void pumem_wait_dispatch()
 {
   Runtime& state      = runtime();

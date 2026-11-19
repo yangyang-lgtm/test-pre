@@ -738,60 +738,6 @@ public:
   }
 };
 
-class CallOpLowering : public OpConversionPattern<triton::CallOp>
-{
-public:
-  using OpConversionPattern::OpConversionPattern;
-
-  static bool unsetAttrs(NamedAttribute attr)
-  {
-    constexpr std::array<StringRef, 3> unsetNames{"callee", "arg_attrs", "res_attrs"};
-    StringRef name = attr.getName().getValue();
-    for (auto unsetName : unsetNames)
-      if (name == unsetName) return true;
-    return false;
-  }
-
-  LogicalResult
-  matchAndRewrite(triton::CallOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
-  {
-    SmallVector<Type> newResults;
-    SmallVector<size_t> resultCounts;
-    for (Type type : op.getResultTypes()) {
-      SmallVector<Type> converted;
-      if (failed(getTypeConverter()->convertTypes(type, converted)))
-        return rewriter.notifyMatchFailure(op, "cannot convert call result types");
-      newResults.append(converted.begin(), converted.end());
-      resultCounts.push_back(converted.size());
-    }
-
-    SmallVector<Value> operands = flattenValues(adaptor.getOperands());
-    auto newOp                  = func::CallOp::create(rewriter, op.getLoc(), op.getCalleeAttr(), newResults, operands);
-    for (NamedAttribute attr : op->getAttrs()) {
-      if (unsetAttrs(attr)) continue;
-      newOp->setAttr(attr.getName(), attr.getValue());
-    }
-
-    if (op.getArgAttrsAttr())
-      newOp.setArgAttrsAttr(
-        rewriter.getArrayAttr(expandAttrArray(op.getArgAttrsAttr(), op.getOperandTypes(), *getTypeConverter()))
-      );
-    if (op.getResAttrsAttr())
-      newOp.setResAttrsAttr(
-        rewriter.getArrayAttr(expandAttrArray(op.getResAttrsAttr(), op.getResultTypes(), *getTypeConverter()))
-      );
-
-    SmallVector<ValueRange> replacements;
-    unsigned offset = 0;
-    for (size_t count : resultCounts) {
-      replacements.push_back(newOp.getResults().slice(offset, count));
-      offset += count;
-    }
-    rewriter.replaceOpWithMultiple(op, replacements);
-    return success();
-  }
-};
-
 class ReturnOpLowering : public OpConversionPattern<triton::ReturnOp>
 {
 public:
@@ -985,29 +931,19 @@ public:
   }
 };
 
-enum class EntryArgKind {
-  Keep,
-  Constant,
-  DropIfUnused,
-};
-
-struct EntryArg
-{
-  EntryArgKind kind;
-  int64_t value;
-};
-
-using EntryConstants = llvm::DenseMap<StringAttr, SmallVector<EntryArg>>;
-
-EntryArg entryConstant(int64_t value)
-{
-  if (value == ShapedType::kDynamic) return {EntryArgKind::DropIfUnused, 0};
-  return {EntryArgKind::Constant, value};
-}
-
 struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
 {
   using MemrefToPumemBase::MemrefToPumemBase;
+
+  enum class EntryArgKind { Keep, Constant, DropIfUnused };
+  struct EntryArg { EntryArgKind kind; int64_t value; };
+  using EntryConstants = llvm::DenseMap<StringAttr, SmallVector<EntryArg>>;
+
+  EntryArg entryConstant(int64_t value)
+  {
+    if (value == ShapedType::kDynamic) return {EntryArgKind::DropIfUnused, 0};
+    return {EntryArgKind::Constant, value};
+  }
 
   void runOnOperation() override
   {
@@ -1047,7 +983,6 @@ struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
     patterns.add<IfOpLowering<scf::IfOp>, IfOpLowering<pumem::IfOp>>(converter, &getContext());
     patterns.add<YieldOpLowering<scf::YieldOp>, YieldOpLowering<pumem::YieldOp>>(converter, &getContext());
     patterns.add<FuncOpLowering>(converter, &getContext());
-    patterns.add<CallOpLowering>(converter, &getContext());
     patterns.add<ReturnOpLowering>(converter, &getContext());
     populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(patterns, converter);
     populateCallOpTypeConversionPattern(patterns, converter);
@@ -1056,7 +991,6 @@ struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
     if (failed(applyPartialConversion(module, target, std::move(patterns)))) return signalPassFailure();
 
     if (failed(foldEntryConstants(entryConstants))) signalPassFailure();
-    if (failed(eraseDeadArguments())) signalPassFailure();
   }
 
 private:
@@ -1118,44 +1052,6 @@ private:
       return WalkResult::advance();
     });
     return failure(result.wasInterrupted());
-  }
-
-  LogicalResult eraseDeadArguments()
-  {
-    ModuleOp module = getOperation();
-    struct Update
-    {
-      func::FuncOp func;
-      llvm::BitVector dead;
-    };
-    SmallVector<Update> updates;
-    module.walk([&](func::FuncOp func) {
-      if (func.isExternal() || func.isPublic()) return;
-      llvm::BitVector dead(func.getNumArguments());
-      for (auto [i, arg] : llvm::enumerate(func.getArguments()))
-        if (arg.use_empty()) dead.set(i);
-      if (dead.none()) return;
-      std::optional<SymbolTable::UseRange> uses = SymbolTable::getSymbolUses(func, module);
-      if (!uses) return;
-      for (SymbolTable::SymbolUse use : *uses)
-        if (!isa<func::CallOp>(use.getUser())) return;
-      updates.push_back({func, dead});
-    });
-
-    for (Update& update : updates) {
-      std::optional<SymbolTable::UseRange> uses = SymbolTable::getSymbolUses(update.func, module);
-      if (!uses) return update.func->emitError("lost the symbol uses of a private function");
-      for (SymbolTable::SymbolUse use : *uses) {
-        auto call = cast<func::CallOp>(use.getUser());
-        SmallVector<Value> operands;
-        for (auto [i, operand] : llvm::enumerate(call.getOperands()))
-          if (!update.dead.test(i)) operands.push_back(operand);
-        call.getOperandsMutable().assign(operands);
-      }
-      if (failed(update.func.eraseArguments(update.dead)))
-        return update.func->emitError("failed to erase dead arguments");
-    }
-    return success();
   }
 
 };

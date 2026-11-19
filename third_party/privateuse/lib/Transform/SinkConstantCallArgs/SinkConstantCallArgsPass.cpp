@@ -21,9 +21,6 @@ using namespace mlir;
 
 namespace {
 
-// One call site of a function. Both an IR call and a runtime call pass their
-// arguments as the operand list in declaration order, so the folding below does
-// not care which form the caller uses.
 struct CallSite
 {
   Operation* op;
@@ -32,10 +29,6 @@ struct CallSite
 
 std::optional<CallSite> asCallSite(Operation* op)
 {
-  if (auto call = dyn_cast<func::CallOp>(op)) {
-    if (call.getArgAttrsAttr()) return std::nullopt;
-    return CallSite{op, call.getOperands()};
-  }
   if (auto call = dyn_cast<pumem::RuntimeCallOp>(op)) return CallSite{op, call.getOperands()};
   return std::nullopt;
 }
@@ -66,16 +59,15 @@ struct SinkConstantCallArgsPass : public ::impl::SinkConstantCallArgsBase<SinkCo
     ModuleOp module = getOperation();
 
     module.walk([&](func::FuncOp func) {
-      if (func.isExternal()) return;
-      if (SymbolTable::getSymbolVisibility(func) != SymbolTable::Visibility::Private) return;
+      if (func.isExternal() || func.isPublic()) return;
 
       std::optional<SymbolTable::UseRange> uses = SymbolTable::getSymbolUses(func, module);
-      if (!uses || uses->empty()) return;
+      if (!uses) return;
 
       SmallVector<CallSite> sites;
       for (SymbolTable::SymbolUse use : *uses) {
         std::optional<CallSite> site = asCallSite(use.getUser());
-        if (!site) return;
+        if (!site || site->arguments.size() != func.getNumArguments()) return;
         sites.push_back(*site);
       }
 
@@ -83,6 +75,10 @@ struct SinkConstantCallArgsPass : public ::impl::SinkConstantCallArgsBase<SinkCo
       llvm::BitVector erased(numInputs);
       SmallVector<Operation*> constants(numInputs);
       for (unsigned i = 0; i < numInputs; ++i) {
+        if (func.getArgument(i).use_empty()) {
+          erased.set(i);
+          continue;
+        }
         if (Operation* constant = uniformConstantOperand(sites, i)) {
           constants[i] = constant;
           erased.set(i);
@@ -92,7 +88,7 @@ struct SinkConstantCallArgsPass : public ::impl::SinkConstantCallArgsBase<SinkCo
 
       OpBuilder builder = OpBuilder::atBlockBegin(&func.getFunctionBody().front());
       for (unsigned i = 0; i < numInputs; ++i) {
-        if (!erased.test(i)) continue;
+        if (!constants[i]) continue;
         func.getArgument(i).replaceAllUsesWith(builder.clone(*constants[i])->getResult(0));
       }
       if (failed(func.eraseArguments(erased))) return;

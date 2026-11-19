@@ -133,6 +133,7 @@ class LoweringPipeline:
         module = self._specialize(module, grid, constants)
         module = self._fuse_and_bufferize(module)
         module = self._lower_to_stream(module)
+        print(module)
         module = self._transform(module)
         module = self._lower_to_pumem(module)
         cpp = self._emit_cpp(module)
