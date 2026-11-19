@@ -43,7 +43,6 @@
 #include "privateuse/Conversion/MathToPumath/Passes.h"
 #include "privateuse/Conversion/MemrefToPumem/Passes.h"
 #include "privateuse/Conversion/ScfToPumem/Passes.h"
-#include "privateuse/Transform/OutlineToDispatch/Passes.h"
 #include "privateuse/Conversion/ToPuc/Passes.h"
 #include "privateuse/Dialect/PuArith/IR/PuArithDialect.h"
 #include "privateuse/Dialect/PuMath/IR/PuMathDialect.h"
@@ -51,12 +50,10 @@
 #include "privateuse/Dialect/Puc/IR/PucDialect.h"
 #include "privateuse/Transform/LowerLinalgReduce/Passes.h"
 #include "privateuse/Transform/PidLoop/Passes.h"
-#include "privateuse/Transform/Pipeline/Passes.h"
 #include "privateuse/Transform/PucLaunchKernel/Passes.h"
 #include "privateuse/Transform/PucLocalizeCarried/Passes.h"
 #include "privateuse/Transform/PucSimplifyAssign/Passes.h"
 #include "privateuse/Transform/PucVoidPtrArgs/Passes.h"
-#include "privateuse/Transform/ScheduleTimepoints/Passes.h"
 #include "privateuse/Transform/SinkConstantCallArgs/Passes.h"
 #include "privateuse/Transform/SpecializeKernel/Passes.h"
 #include "privateuse/Utils/AccessAnalysis/Passes.h"
@@ -91,16 +88,13 @@ inline void registerPrivateUseDialects(mlir::DialectRegistry& registry)
   mlir::triton::registerMathToPumathPass();
   mlir::triton::registerMemrefToPumemPasses();
   mlir::triton::registerScfToPumemPass();
-  mlir::triton::registerOutlineToDispatchPasses();
   mlir::triton::registerToPucPasses();
   mlir::triton::registerLowerLinalgReducePasses();
   mlir::triton::registerPidLoopPasses();
-  mlir::triton::registerPipelinePasses();
   mlir::triton::registerPucLaunchKernelPasses();
   mlir::triton::registerPucLocalizeCarriedPass();
   mlir::triton::registerPucSimplifyAssignPass();
   mlir::triton::registerPucVoidPtrArgsPass();
-  mlir::triton::registerScheduleTimepointsPasses();
   mlir::triton::registerSinkConstantCallArgsPasses();
   mlir::triton::registerSpecializeKernelPass();
   // clang-format off
