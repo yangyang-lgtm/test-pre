@@ -364,13 +364,16 @@ public:
   }
 };
 
-class CopyOpLowering : public OpConversionPattern<memref::CopyOp>
+// ToPuStream owns every memref.copy: cross-space ones become pustream.async.copy,
+// SRAM-to-SRAM ones become pustream.sync.copy. What is left here is the latter,
+// which lowers to the same box copy the runtime already provides.
+class SyncCopyOpLowering : public OpConversionPattern<pustream::SyncCopyOp>
 {
 public:
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(memref::CopyOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
+  matchAndRewrite(pustream::SyncCopyOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
     Location loc       = op.getLoc();
     auto sourceType    = cast<MemRefType>(op.getSource().getType());
@@ -981,6 +984,9 @@ struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
 
     target.markUnknownOpDynamicallyLegal([](Operation* op) { return !hasMemRefTypes(op); });
     target.addIllegalOp<triton::FuncOp, triton::CallOp, triton::ReturnOp>();
+    // Every memref.copy became a pustream statement in ToPuStream; one that survives
+    // here means a pass above us grew a copy behind our back.
+    target.addIllegalOp<memref::CopyOp>();
     target.addIllegalDialect<pustream::PuStreamDialect>();
 
     RewritePatternSet patterns(&getContext());
@@ -988,7 +994,7 @@ struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
     patterns.add<DeallocOpLowering>(converter, &getContext());
     patterns.add<LoadOpLowering>(converter, &getContext());
     patterns.add<StoreOpLowering>(converter, &getContext());
-    patterns.add<CopyOpLowering>(converter, &getContext());
+    patterns.add<SyncCopyOpLowering>(converter, &getContext());
     patterns.add<TileGatherOpLowering>(converter, &getContext());
     patterns.add<TileScatterOpLowering>(converter, &getContext());
     patterns.add<RuntimeCallOpLowering>(converter, &getContext());

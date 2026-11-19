@@ -151,6 +151,14 @@ struct CopyToAsyncPattern : OpRewritePattern<memref::CopyOp>
     if (!sourceIsSram && !targetIsSram)
       return op->emitError("cannot lower a DRAM-to-DRAM memref.copy to the pustream dialect");
 
+    // Both sides in SRAM: a host copy, not a DMA. It becomes a statement of its
+    // own so the stream dialect owns every copy in the kernel.
+    if (sourceIsSram && targetIsSram) {
+      pustream::SyncCopyOp::create(rewriter, op.getLoc(), op.getSource(), op.getTarget());
+      rewriter.eraseOp(op);
+      return success();
+    }
+
     auto loc   = op.getLoc();
     Value sram = sourceIsSram ? op.getSource() : op.getTarget();
     Value dram = sourceIsSram ? op.getTarget() : op.getSource();
@@ -182,12 +190,7 @@ struct ToPuStreamPass : public ::impl::ToPuStreamBase<ToPuStreamPass>
     ConversionTarget target(getContext());
     target.addLegalDialect<arith::ArithDialect, pustream::PuStreamDialect>();
     target.addIllegalOp<linalg::MatmulOp, linalg::TransposeOp>();
-    target.addDynamicallyLegalOp<memref::CopyOp>([](memref::CopyOp copy) {
-      auto source = dyn_cast<MemRefType>(copy.getSource().getType());
-      auto target = dyn_cast<MemRefType>(copy.getTarget().getType());
-      if (!source || !target) return false;
-      return isSramValue(copy.getSource()) && isSramValue(copy.getTarget());
-    });
+    target.addIllegalOp<memref::CopyOp>();
 
     RewritePatternSet patterns(&getContext());
     patterns.add<MatmulToDispatchPattern, TransposeToDispatchPattern, CopyToAsyncPattern>(&getContext());

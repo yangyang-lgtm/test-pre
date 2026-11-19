@@ -132,6 +132,23 @@ def PuStream_AsyncCopyOp : PUSTREAM_Op<"async.copy", [
   let hasVerifier = 1;
 }
 
+def PuStream_SyncCopyOp : PUSTREAM_Op<"sync.copy", [
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+]> {
+  let summary = "Copy a strided block between two SRAM buffers, synchronously";
+
+  let description = [{
+    Both operands are SRAM memrefs. This is the statement form of a host copy: it
+    blocks until the data is in place, so there is no slot, no handle and nothing
+    to wait on. Same shape as the async copy statement, minus the staging.
+
+    Example:
+      pustream.sync.copy %acc_tile, %acc : memref<f32, 128>, memref<f32, 128>
+  }];
+  let arguments = (ins AnyType:$source, AnyType:$target);
+  let assemblyFormat = "$source `,` $target attr-dict `:` type($source) `,` type($target)";
+  let hasVerifier = 1;
+}
 def PuStream_AsyncDispatchOp : PUSTREAM_Op<"async.dispatch", [
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
 ]> {

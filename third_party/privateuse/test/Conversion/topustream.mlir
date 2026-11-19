@@ -12,11 +12,11 @@ func.func @cross_space(%dram: memref<8xf32>) {
 
 // -----
 
-// An SRAM-to-SRAM copy stays a memref.copy: copy elimination must still be able
-// to see it as a copy, so it is not turned into a dispatch here.
+// An SRAM-to-SRAM copy becomes the synchronous statement form: the stream
+// dialect owns every copy in the kernel, so no memref.copy survives to the
+// pumem conversion.
 // CHECK-LABEL: func.func @sram_to_sram(
-// CHECK: memref.copy %{{.*}}, %{{.*}} : memref<8xf32, 128> to memref<8xf32, 128>
-// CHECK-NOT: pustream.
+// CHECK: pustream.sync.copy %{{.*}}, %{{.*}} : memref<8xf32, 128>, memref<8xf32, 128>
 func.func @sram_to_sram(%a: memref<8xf32, 128>, %b: memref<8xf32, 128>) {
   memref.copy %a, %b : memref<8xf32, 128> to memref<8xf32, 128>
   return

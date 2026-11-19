@@ -246,6 +246,26 @@ void AsyncCopyOp::getEffects(SmallVectorImpl<SideEffects::EffectInstance<MemoryE
   effects.emplace_back(MemoryEffects::Write::get(), Ordering::get());
 }
 
+LogicalResult SyncCopyOp::verify()
+{
+  auto source = dyn_cast<MemRefType>(getSource().getType());
+  auto target = dyn_cast<MemRefType>(getTarget().getType());
+  if (!source || !target) return emitOpError("both operands must be ranked memrefs");
+  if (!isSram(source) || !isSram(target))
+    return emitOpError("both operands must live in SRAM (memory space 128)");
+  if (source.getElementType() != target.getElementType())
+    return emitOpError("element types must match: ") << source.getElementType() << " vs " << target.getElementType();
+  if (source.getRank() != target.getRank())
+    return emitOpError("ranks must match: ") << source.getRank() << " vs " << target.getRank();
+  return success();
+}
+
+void SyncCopyOp::getEffects(SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>& effects)
+{
+  effects.emplace_back(MemoryEffects::Read::get(), &getOperation()->getOpOperand(0));
+  effects.emplace_back(MemoryEffects::Write::get(), &getOperation()->getOpOperand(1));
+}
+
 LogicalResult AsyncDispatchOp::verify()
 {
   const int64_t numArgs = static_cast<int64_t>(getArgs().size());
