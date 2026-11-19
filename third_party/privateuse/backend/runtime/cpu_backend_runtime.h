@@ -10,6 +10,8 @@
 #include <type_traits>
 #include <utility>
 
+#include "pumem_async_runtime.h"
+
 #define DRAM
 #define SRAM
 #define GLOBAL
@@ -30,9 +32,6 @@ int64_t get_physical_id();
 void* alloc(int64_t bytes, int64_t alignment);
 void dealloc(void* ptr);
 void reset_alloc();
-
-inline void pumem_sync() {}
-inline void pumem_wait() {}
 
 namespace detail {
 void box_copy(
@@ -205,6 +204,14 @@ template <typename T, int64_t M, int64_t N, int64_t K> void runtime_matmul(T* A,
       C[i * N + j] = static_cast<T>(acc);
     }
   }
+}
+
+// Element-wise copy between two buffers of the same static shape. Used when a
+// same-space copy has no DMA handle to wait on, so it has to run on the compute
+// executor instead of the host.
+template <typename T, int64_t NumElements> void runtime_copy(T* src, T* dst)
+{
+  for (int64_t i = 0; i < NumElements; ++i) dst[i] = src[i];
 }
 
 template <typename T, int64_t Rows, int64_t Cols> void runtime_transpose(T* src, T* dst)

@@ -132,12 +132,12 @@ class LoweringPipeline:
         module = self._parse_ir(kernel_ir)
         module = self._specialize(module, grid, constants)
         module = self._fuse_and_bufferize(module)
-        print(module)
         module = self._lower_to_stream(module)
         print(module)
         module = self._transform(module)
         module = self._lower_to_pumem(module)
         cpp = self._emit_cpp(module)
+        print(cpp)
         _check_entry_symbol(cpp, kernel_name)
         return self._compile_object(cpp)
 
@@ -208,6 +208,8 @@ class LoweringPipeline:
         privateuse.add_to_pustream(pm)
         privateuse.add_outline_to_dispatch(pm, self.outlined_attr)
         privateuse.add_schedule_timepoints(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.common.add_cse(pm)
         pm.run(module, 'lower_to_stream')
         return module
 
@@ -259,8 +261,9 @@ class LoweringPipeline:
             so_path = os.path.join(tmpdir, "kernel.so")
             Path(src_path).write_text(cpp)
             subprocess.check_call([
-                "g++", "-std=gnu++17", "-O2", "-fPIC", "-shared", f"-I{runtime_dir}", src_path,
-                os.path.join(runtime_dir, "cpu_backend_runtime.cpp"), "-o", so_path
+                "g++", "-std=gnu++17", "-O2", "-pthread", "-fPIC", "-shared", f"-I{runtime_dir}", src_path,
+                os.path.join(runtime_dir, "cpu_backend_runtime.cpp"),
+                os.path.join(runtime_dir, "pumem_async_runtime.cpp"), "-o", so_path
             ])
             return Path(so_path).read_bytes()
 

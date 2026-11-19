@@ -146,8 +146,7 @@ struct OutlineToDispatchPass : public ::impl::OutlineToDispatchBase<OutlineToDis
 
     builder.setInsertionPoint(op);
     pustream::AsyncDispatchOp::create(
-      builder, op->getLoc(), pustream::TimepointType::get(&getContext()), outlined.getSymName(),
-      /*templateArgs=*/nullptr, boundary, /*awaits=*/ValueRange{}, reads, writes
+      builder, op->getLoc(), outlined.getSymName(), /*templateArgs=*/nullptr, boundary, reads, writes
     );
     op->erase();
   }

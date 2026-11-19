@@ -18,6 +18,7 @@ inline constexpr int kNumAxes = static_cast<int>(getMaxEnumValForProgramIDDim())
 
 inline constexpr llvm::StringLiteral kGridAttr     = "privateuse.grid";
 inline constexpr llvm::StringLiteral kOutlinedAttr = "pumem.outlined";
+inline constexpr llvm::StringLiteral kStagesAttr = "pustream.stages";
 }
 }
 

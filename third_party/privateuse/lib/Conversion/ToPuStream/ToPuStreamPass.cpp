@@ -8,6 +8,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "privateuse/Dialect/PuStream/IR/PuStreamDialect.h"
+#include "privateuse/Utils/Constants.h"
 
 #include "llvm/ADT/STLFunctionalExtras.h"
 
@@ -21,6 +22,16 @@ using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
+
+bool isSramValue(Value value)
+{
+  auto type = dyn_cast<MemRefType>(value.getType());
+  if (!type) return false;
+  Attribute space = type.getMemorySpace();
+  if (!space) return false;
+  if (auto integer = dyn_cast<IntegerAttr>(space)) return integer.getInt() == triton::kSramSpace;
+  return false;
+}
 
 FailureOr<SmallVector<MemRefType>> checkMemrefOperands(
   Operation* op, function_ref<LogicalResult(const Twine&)> fail,
@@ -43,8 +54,7 @@ void replaceWithDispatch(
 )
 {
   pustream::AsyncDispatchOp::create(
-    rewriter, op->getLoc(), pustream::TimepointType::get(rewriter.getContext()), callee, templateArgs,
-    op->getOperands(), /*awaits=*/ValueRange{}, reads, writes
+    rewriter, op->getLoc(), callee, templateArgs, op->getOperands(), reads, writes
   );
   rewriter.eraseOp(op);
 }
@@ -138,10 +148,23 @@ struct CopyToAsyncPattern : OpRewritePattern<memref::CopyOp>
     if (!source || !target)
       return op.emitError("cannot lower memref.copy to an async copy: expected ranked memref operands");
 
-    pustream::AsyncCopyOp::create(
-      rewriter, op.getLoc(), pustream::TimepointType::get(rewriter.getContext()), op.getSource(), op.getTarget(),
-      /*awaits=*/ValueRange{}
-    );
+    bool sourceIsSram = isSramValue(op.getSource());
+    bool targetIsSram = isSramValue(op.getTarget());
+    if (!sourceIsSram && !targetIsSram)
+      return op->emitError("cannot lower a DRAM-to-DRAM memref.copy to the pustream dialect");
+
+    auto loc = op.getLoc();
+    Value sram = sourceIsSram ? op.getSource() : op.getTarget();
+    Value dram = sourceIsSram ? op.getTarget() : op.getSource();
+
+    auto tile = cast<MemRefType>(sram.getType());
+    Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
+    auto slotType = pustream::SlotType::get(rewriter.getContext(), tile);
+    Value slot = pustream::SlotOp::create(rewriter, loc, slotType, sram, zero);
+
+    Value from = sourceIsSram ? slot : dram;
+    Value to = sourceIsSram ? dram : slot;
+    pustream::AsyncCopyOp::create(rewriter, loc, from, to);
     rewriter.eraseOp(op);
     return success();
   }
@@ -164,7 +187,8 @@ struct ToPuStreamPass : public ::impl::ToPuStreamBase<ToPuStreamPass>
     target.addDynamicallyLegalOp<memref::CopyOp>([](memref::CopyOp copy) {
       auto source = dyn_cast<MemRefType>(copy.getSource().getType());
       auto target = dyn_cast<MemRefType>(copy.getTarget().getType());
-      return source && target && source.getMemorySpace() == target.getMemorySpace();
+      if (!source || !target) return false;
+      return isSramValue(copy.getSource()) && isSramValue(copy.getTarget());
     });
 
     RewritePatternSet patterns(&getContext());

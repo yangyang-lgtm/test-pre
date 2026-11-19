@@ -5,6 +5,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Interfaces/ViewLikeInterface.h"
 #include "privateuse/Dialect/PuStream/IR/PuStreamDialect.h"
 
@@ -36,144 +37,172 @@ Value viewBase(Value value)
   return value;
 }
 
-struct PendingWaits
+Value baseOf(Value value)
 {
-  DenseMap<Value, Value> writers;
-  DenseMap<Value, SmallVector<Value>> readers;
-};
+  if (auto slot = value.getDefiningOp<pustream::SlotOp>()) return viewBase(slot.getBuffer());
+  return viewBase(value);
+}
 
 class Scheduler
 {
 public:
-  explicit Scheduler(MLIRContext* context) : context(context) {}
-
-  void scheduleBlock(Block& block)
+  void scheduleFunction(FunctionOpInterface func)
   {
-    PendingWaits pending;
-    SmallVector<Value> tokens = runBlockImpl(block, pending);
-    drain(block.getTerminator(), tokens);
+    sawAsync = false;
+    for (Block& block : func.getFunctionBody()) scheduleBlock(block, /*isFunctionBody=*/true);
+    if (!sawAsync) return;
+
+    for (Block& block : func.getFunctionBody()) {
+      Operation* terminator = block.getTerminator();
+      OpBuilder builder(terminator);
+      pustream::SyncOp::create(builder, terminator->getLoc());
+    }
   }
 
 private:
-  void drain(Operation* terminator, ArrayRef<Value> tokens)
+  void clearCompute()
   {
-    if (tokens.empty()) return;
-    OpBuilder builder(terminator);
-    Value joined = tokens.size() == 1 ? tokens.front()
-                                      : pustream::JoinOp::create(builder, terminator->getLoc(), timepoint(), tokens);
-    pustream::AwaitOp::create(builder, terminator->getLoc(), joined);
+    computePending = false;
+    computeTouched.clear();
   }
 
-  Type timepoint() const { return pustream::TimepointType::get(context); }
-
-  SmallVector<Value> runBlockImpl(Block& block, PendingWaits& pending)
+  void clearAll()
   {
-    SmallVector<Value> tokens;
-    for (Operation& op : llvm::make_early_inc_range(block)) schedule(&op, pending, tokens);
-    return tokens;
+    pendingDma.clear();
+    clearCompute();
   }
 
-  void schedule(Operation* op, PendingWaits& pending, SmallVector<Value>& tokens)
+  void drainAt(Operation* where)
   {
+    OpBuilder builder(where);
+    Location loc = where->getLoc();
+    SmallVector<Value> slots;
+    for (auto& entry : pendingDma) slots.push_back(entry.second);
+    for (Value slot : slots) pustream::WaitOp::create(builder, loc, slot);
+    if (computePending) pustream::WaitDispatchOp::create(builder, loc);
+    clearAll();
+  }
+
+  void scheduleBlock(Block& block, bool isFunctionBody)
+  {
+    for (Operation& op : llvm::make_early_inc_range(block)) {
+      if (op.hasTrait<OpTrait::IsTerminator>()) break;
+      visit(&op);
+    }
+    if (!isFunctionBody) drainAt(block.getTerminator());
+  }
+
+  void scheduleRegion(Region& region)
+  {
+    for (Block& block : region) scheduleBlock(block, /*isFunctionBody=*/false);
+    clearAll();
+  }
+
+  void visit(Operation* op)
+  {
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) return scheduleRegion(forOp.getRegion());
     if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-      scheduleRegion(ifOp.getThenRegion(), pending);
-      scheduleRegion(ifOp.getElseRegion(), pending);
+      scheduleRegion(ifOp.getThenRegion());
+      if (!ifOp.getElseRegion().empty()) scheduleRegion(ifOp.getElseRegion());
       return;
     }
-    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      scheduleRegion(forOp.getRegion(), pending);
+    if (auto copy = dyn_cast<pustream::AsyncCopyOp>(op)) return handleCopy(copy);
+    if (auto dispatch = dyn_cast<pustream::AsyncDispatchOp>(op)) return handleDispatch(dispatch);
+    if (auto wait = dyn_cast<pustream::WaitOp>(op)) {
+      pendingDma.erase(baseOf(wait.getSlot()));
       return;
     }
-    if (auto dispatch = dyn_cast<pustream::AsyncDispatchOp>(op)) {
-      scheduleDispatch(dispatch, pending, tokens);
-      return;
+    if (isa<pustream::WaitDispatchOp>(op)) return clearCompute();
+    if (isa<pustream::SyncOp>(op)) return drainAt(op);
+    return handleSynchronous(op);
+  }
+
+  void handleCopy(pustream::AsyncCopyOp copy)
+  {
+    OpBuilder builder(copy);
+    Location loc = copy.getLoc();
+    const bool store = isa<pustream::SlotType>(copy.getSource().getType());
+    Value slot      = store ? copy.getSource() : copy.getTarget();
+    Value base      = baseOf(slot);
+
+    if (computePending && computeTouched.contains(base)) {
+      pustream::WaitDispatchOp::create(builder, loc);
+      clearCompute();
     }
-    if (auto copy = dyn_cast<pustream::AsyncCopyOp>(op)) {
-      scheduleAsyncCopy(copy, pending, tokens);
-      return;
+    if (auto it = pendingDma.find(base); it != pendingDma.end()) {
+      pustream::WaitOp::create(builder, loc, it->second);
+      pendingDma.erase(it);
     }
-    if (auto copy = dyn_cast<memref::CopyOp>(op)) {
-      scheduleSyncCopy(copy, pending);
-      return;
+    pendingDma[base] = slot;
+    sawAsync         = true;
+  }
+
+  void handleDispatch(pustream::AsyncDispatchOp dispatch)
+  {
+    OpBuilder builder(dispatch);
+    Location loc = dispatch.getLoc();
+
+    SmallVector<Value> bases;
+    for (int64_t index : dispatch.getReads()) bases.push_back(baseOf(dispatch.getArgs()[index]));
+    for (int64_t index : dispatch.getWrites()) bases.push_back(baseOf(dispatch.getArgs()[index]));
+
+    for (Value base : bases) {
+      if (auto it = pendingDma.find(base); it != pendingDma.end()) {
+        pustream::WaitOp::create(builder, loc, it->second);
+        pendingDma.erase(it);
+      }
     }
+
+    if (computePending)
+      for (Value base : bases)
+        if (computeTouched.contains(base)) {
+          pustream::WaitDispatchOp::create(builder, loc);
+          clearCompute();
+          break;
+        }
+
+    computePending = true;
+    for (Value base : bases) computeTouched.insert(base);
+    sawAsync = true;
   }
 
-  void scheduleRegion(Region& region, PendingWaits& pending)
+  void handleSynchronous(Operation* op)
   {
-    if (region.empty()) return;
-    PendingWaits inner = pending;
-    SmallVector<Value> tokens;
-    for (Block& block : region) llvm::append_range(tokens, runBlockImpl(block, inner));
-    for (Block& block : region) drain(block.getTerminator(), tokens);
-  }
+    auto effects = dyn_cast<MemoryEffectOpInterface>(op);
+    if (!effects) return;
 
-  SmallVector<Value> collectDependencies(ArrayRef<Value> reads, ArrayRef<Value> writes, const PendingWaits& pending)
-  {
-    SmallVector<Value> deps;
-    SmallPtrSet<Value, 8> seen;
-    auto add = [&](Value token) {
-      if (token && seen.insert(token).second) deps.push_back(token);
-    };
-
-    for (Value base : reads) add(pending.writers.lookup(base));
-    for (Value base : writes) {
-      add(pending.writers.lookup(base));
-      for (Value token : pending.readers.lookup(base)) add(token);
+    SmallVector<Value> bases;
+    SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> instances;
+    effects.getEffects(instances);
+    for (auto& instance : instances) {
+      if (!isa<MemoryEffects::Read, MemoryEffects::Write>(instance.getEffect())) continue;
+      Value value = instance.getValue();
+      if (!value || !isa<BaseMemRefType>(value.getType())) continue;
+      bases.push_back(baseOf(value));
     }
-    return deps;
-  }
+    if (bases.empty()) return;
 
-  void recordWrites(ArrayRef<Value> writes, PendingWaits& pending, Value token)
-  {
-    for (Value base : writes) {
-      pending.readers.erase(base);
-      if (token)
-        pending.writers[base] = token;
-      else
-        pending.writers.erase(base);
+    OpBuilder builder(op);
+    Location loc = op->getLoc();
+    for (Value base : bases) {
+      if (auto it = pendingDma.find(base); it != pendingDma.end()) {
+        pustream::WaitOp::create(builder, loc, it->second);
+        pendingDma.erase(it);
+      }
     }
+    if (computePending)
+      for (Value base : bases)
+        if (computeTouched.contains(base)) {
+          pustream::WaitDispatchOp::create(builder, loc);
+          clearCompute();
+          break;
+        }
   }
 
-  void recordReads(ArrayRef<Value> reads, PendingWaits& pending, Value token)
-  {
-    if (!token) return;
-    for (Value base : reads) pending.readers[base].push_back(token);
-  }
-
-  void scheduleDispatch(pustream::AsyncDispatchOp op, PendingWaits& pending, SmallVector<Value>& tokens)
-  {
-    SmallVector<Value> reads;
-    SmallVector<Value> writes;
-    for (int64_t index : op.getReads()) reads.push_back(viewBase(op.getArgs()[index]));
-    for (int64_t index : op.getWrites()) writes.push_back(viewBase(op.getArgs()[index]));
-
-    op.getAwaitsMutable().append(collectDependencies(reads, writes, pending));
-    recordWrites(writes, pending, op.getDone());
-    recordReads(reads, pending, op.getDone());
-    tokens.push_back(op.getDone());
-  }
-
-  void scheduleAsyncCopy(pustream::AsyncCopyOp op, PendingWaits& pending, SmallVector<Value>& tokens)
-  {
-    Value source = viewBase(op.getSource());
-    Value target = viewBase(op.getTarget());
-    op.getAwaitsMutable().append(collectDependencies({source}, {target}, pending));
-
-    recordWrites({target}, pending, op.getDone());
-    recordReads({source}, pending, op.getDone());
-    tokens.push_back(op.getDone());
-  }
-
-  void scheduleSyncCopy(memref::CopyOp op, PendingWaits& pending)
-  {
-    Value source            = viewBase(op.getSource());
-    Value target            = viewBase(op.getTarget());
-    SmallVector<Value> deps = collectDependencies({source}, {target}, pending);
-    drain(op, deps);
-    recordWrites({target}, pending, Value{});
-  }
-
-  MLIRContext* context;
+  DenseMap<Value, Value> pendingDma;
+  SmallPtrSet<Value, 8> computeTouched;
+  bool computePending = false;
+  bool sawAsync       = false;
 };
 
 struct ScheduleTimepointsPass : public ::impl::ScheduleTimepointsBase<ScheduleTimepointsPass>
@@ -187,9 +216,8 @@ struct ScheduleTimepointsPass : public ::impl::ScheduleTimepointsBase<ScheduleTi
       if (!func.isExternal()) funcs.push_back(func);
     });
 
-    Scheduler scheduler(&getContext());
-    for (auto func : funcs)
-      for (Block& block : func.getFunctionBody()) scheduler.scheduleBlock(block);
+    Scheduler scheduler;
+    for (auto func : funcs) scheduler.scheduleFunction(func);
   }
 };
 

@@ -27,8 +27,6 @@
 using namespace mlir;
 using namespace mlir::pumem;
 
-// Mask buffers are i1 in the buffer world but get promoted to i8 alongside
-// the rest of the i1 values before lowering (see the i1 -> i8 conversion).
 static bool isMaskElementType(Type type)
 {
   return type.isInteger(1) || type.isInteger(8);
