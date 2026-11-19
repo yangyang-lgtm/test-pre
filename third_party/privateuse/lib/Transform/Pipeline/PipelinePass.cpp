@@ -119,9 +119,9 @@ struct Candidate
 {
   scf::ForOp loop;
   pustream::AsyncCopyOp load;
-  Value tile;                              // base alloc behind the load slot
+  Value tile; // base alloc behind the load slot
   SmallVector<pustream::AsyncDispatchOp> consumers;
-  pustream::AsyncCopyOp store;             // null for a reduction loop
+  pustream::AsyncCopyOp store; // null for a reduction loop
 };
 
 std::optional<Candidate> match(scf::ForOp loop, std::string& reason)
@@ -154,7 +154,7 @@ std::optional<Candidate> match(scf::ForOp loop, std::string& reason)
   }
 
   pustream::AsyncCopyOp load = loads.front();
-  auto slot = load.getTarget().getDefiningOp<pustream::SlotOp>();
+  auto slot                  = load.getTarget().getDefiningOp<pustream::SlotOp>();
   if (!slot) {
     reason = "the load target is not a pustream.slot";
     return std::nullopt;
@@ -165,10 +165,8 @@ std::optional<Candidate> match(scf::ForOp loop, std::string& reason)
   SmallVector<pustream::AsyncDispatchOp> consumers;
   for (pustream::AsyncDispatchOp dispatch : dispatches) {
     bool reads = false, writes = false;
-    for (int64_t index : dispatch.getReads())
-      reads |= baseOf(dispatch.getArgs()[index]) == tile;
-    for (int64_t index : dispatch.getWrites())
-      writes |= baseOf(dispatch.getArgs()[index]) == tile;
+    for (int64_t index : dispatch.getReads()) reads |= baseOf(dispatch.getArgs()[index]) == tile;
+    for (int64_t index : dispatch.getWrites()) writes |= baseOf(dispatch.getArgs()[index]) == tile;
     if (writes) {
       reason = "the body writes the loaded tile (masked fill); needs the tail-slot transform";
       return std::nullopt;
@@ -191,11 +189,11 @@ std::optional<Candidate> match(scf::ForOp loop, std::string& reason)
   }
 
   Candidate candidate;
-  candidate.loop       = loop;
-  candidate.load       = load;
-  candidate.tile       = tile;
-  candidate.consumers  = std::move(consumers);
-  candidate.store      = stores.empty() ? pustream::AsyncCopyOp{} : stores.front();
+  candidate.loop      = loop;
+  candidate.load      = load;
+  candidate.tile      = tile;
+  candidate.consumers = std::move(consumers);
+  candidate.store     = stores.empty() ? pustream::AsyncCopyOp{} : stores.front();
   return candidate;
 }
 

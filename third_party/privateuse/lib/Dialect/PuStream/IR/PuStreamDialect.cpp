@@ -66,8 +66,7 @@ std::optional<int64_t> constantIndex(Value index)
 MemRefType expectedTile(MemRefType buffer)
 {
   return MemRefType::get(
-    buffer.getShape().drop_front(), buffer.getElementType(), MemRefLayoutAttrInterface{},
-    buffer.getMemorySpace()
+    buffer.getShape().drop_front(), buffer.getElementType(), MemRefLayoutAttrInterface{}, buffer.getMemorySpace()
   );
 }
 
@@ -117,8 +116,7 @@ LogicalResult SlotOp::verify()
 
   std::optional<int64_t> stages = declaredStages(getBuffer());
   if (!stages) {
-    if (tile.getTile() != buffer)
-      return emitOpError("a single-stage buffer's slot must have the buffer's own type");
+    if (tile.getTile() != buffer) return emitOpError("a single-stage buffer's slot must have the buffer's own type");
     if (std::optional<int64_t> index = constantIndex(getIndex())) {
       if (*index != 0) return emitOpError("a single-stage buffer has only stage 0");
     } else {
@@ -127,8 +125,7 @@ LogicalResult SlotOp::verify()
     return success();
   }
 
-  if (buffer.getRank() < 2)
-    return emitOpError("a staged buffer needs at least two dimensions (stage x tile)");
+  if (buffer.getRank() < 2) return emitOpError("a staged buffer needs at least two dimensions (stage x tile)");
   if (*stages <= 0) return emitOpError() << triton::kStagesAttr << " must be positive";
   if (buffer.getShape().front() != *stages)
     return emitOpError() << triton::kStagesAttr << " (" << *stages << ") must equal dim 0 ("
@@ -147,24 +144,19 @@ LogicalResult AsyncCopyOp::verify()
   const bool sourceIsSlot = isa<SlotType>(getSource().getType());
   const bool targetIsSlot = isa<SlotType>(getTarget().getType());
   if (sourceIsSlot == targetIsSlot)
-    return emitOpError(
-      "exactly one operand must be a !pustream.slot; slot-to-slot and"
-      " memref-to-memref copies are not expressible"
-    );
+    return emitOpError("exactly one operand must be a !pustream.slot; slot-to-slot and"
+                       " memref-to-memref copies are not expressible");
 
   Value staged = sourceIsSlot ? getSource() : getTarget();
   Value dram   = sourceIsSlot ? getTarget() : getSource();
 
   auto dramType = dyn_cast<MemRefType>(dram.getType());
-  if (!dramType)
-    return emitOpError("the non-slot operand must be a ranked memref (the DRAM side)");
-  if (!isDram(dramType))
-    return emitOpError("the non-slot operand must live in DRAM (memory space 0)");
+  if (!dramType) return emitOpError("the non-slot operand must be a ranked memref (the DRAM side)");
+  if (!isDram(dramType)) return emitOpError("the non-slot operand must live in DRAM (memory space 0)");
 
   MemRefType tile = cast<SlotType>(staged.getType()).getTile();
   if (tile.getElementType() != dramType.getElementType())
-    return emitOpError("element types must match: ") << tile.getElementType() << " vs "
-                      << dramType.getElementType();
+    return emitOpError("element types must match: ") << tile.getElementType() << " vs " << dramType.getElementType();
   if (tile.getRank() != dramType.getRank())
     return emitOpError("box rank must match: ") << tile.getRank() << " vs " << dramType.getRank();
 
@@ -193,8 +185,7 @@ ParseResult AsyncCopyOp::parse(OpAsmParser& parser, OperationState& result)
   Type sourceType, targetType;
   if (parser.parseOperand(source) || parser.parseComma() || parser.parseOperand(target)) return failure();
   if (parser.parseOptionalAttrDict(result.attributes)) return failure();
-  if (parser.parseColonType(sourceType) || parser.parseComma() || parser.parseType(targetType))
-    return failure();
+  if (parser.parseColonType(sourceType) || parser.parseComma() || parser.parseType(targetType)) return failure();
   if (parser.resolveOperand(source, sourceType, result.operands)) return failure();
   return parser.resolveOperand(target, targetType, result.operands);
 }
@@ -258,9 +249,8 @@ void AsyncCopyOp::getEffects(SmallVectorImpl<SideEffects::EffectInstance<MemoryE
 LogicalResult AsyncDispatchOp::verify()
 {
   const int64_t numArgs = static_cast<int64_t>(getArgs().size());
-  auto verifyIndex = [&](int64_t index, StringRef list) -> LogicalResult {
-    if (index < 0 || index >= numArgs)
-      return emitOpError() << list << " index " << index << " is out of range";
+  auto verifyIndex      = [&](int64_t index, StringRef list) -> LogicalResult {
+    if (index < 0 || index >= numArgs) return emitOpError() << list << " index " << index << " is out of range";
     Type type = getArgs()[static_cast<size_t>(index)].getType();
     if (!isa<MemRefType, SlotType>(type))
       return emitOpError() << list << " index " << index << " does not refer to a buffer argument";
@@ -276,7 +266,7 @@ LogicalResult AsyncDispatchOp::verify()
 void AsyncDispatchOp::getEffects(SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>& effects)
 {
   const int64_t numArgs = static_cast<int64_t>(getArgs().size());
-  auto add = [&](int64_t index, MemoryEffects::Effect* effect) {
+  auto add              = [&](int64_t index, MemoryEffects::Effect* effect) {
     if (index < 0 || index >= numArgs) return;
     effects.emplace_back(effect, &getOperation()->getOpOperand(static_cast<unsigned>(index)));
   };

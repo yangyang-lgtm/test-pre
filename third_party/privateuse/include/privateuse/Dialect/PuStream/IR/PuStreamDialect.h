@@ -13,7 +13,8 @@ namespace mlir::pustream {
 // issuer, so no pass may reorder two async statements; encoding that as one
 // side effect makes the illegal reorderings unrepresentable instead of relying
 // on pass discipline.
-struct Ordering : public SideEffects::Resource::Base<Ordering> {
+struct Ordering : public SideEffects::Resource::Base<Ordering>
+{
   StringRef getName() const override { return "pustream.ordering"; }
 };
 

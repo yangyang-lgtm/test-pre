@@ -44,11 +44,9 @@ struct ScheduleTimepointsPass : public ::impl::ScheduleTimepointsBase<ScheduleTi
       SmallVector<Operation*> dispatches;
       bool hasAsync = false;
       func->walk([&](Operation* op) {
-        const bool async = isa<pustream::AsyncCopyOp>(op) || isa<pustream::AsyncDispatchOp>(op);
+        bool async = isa<pustream::AsyncCopyOp>(op) || isa<pustream::AsyncDispatchOp>(op);
         if (!async) return;
         hasAsync = true;
-        // A pipelined loop schedules its own body, but its transfers are still
-        // in flight at kernel exit, so the drain below is still needed.
         if (ownedByPipeliner(op)) return;
         if (isa<pustream::AsyncCopyOp>(op))
           copies.push_back(op);
@@ -71,7 +69,7 @@ struct ScheduleTimepointsPass : public ::impl::ScheduleTimepointsBase<ScheduleTi
         pustream::WaitDispatchOp::create(builder, op->getLoc());
       }
 
-      Block& entry       = func.getFunctionBody().front();
+      Block& entry          = func.getFunctionBody().front();
       Operation* terminator = entry.getTerminator();
       OpBuilder builder(terminator);
       pustream::SyncOp::create(builder, terminator->getLoc());

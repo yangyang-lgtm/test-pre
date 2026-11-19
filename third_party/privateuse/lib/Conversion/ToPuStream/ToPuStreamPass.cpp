@@ -53,9 +53,7 @@ void replaceWithDispatch(
   ArrayRef<int64_t> writes
 )
 {
-  pustream::AsyncDispatchOp::create(
-    rewriter, op->getLoc(), callee, templateArgs, op->getOperands(), reads, writes
-  );
+  pustream::AsyncDispatchOp::create(rewriter, op->getLoc(), callee, templateArgs, op->getOperands(), reads, writes);
   rewriter.eraseOp(op);
 }
 
@@ -153,17 +151,17 @@ struct CopyToAsyncPattern : OpRewritePattern<memref::CopyOp>
     if (!sourceIsSram && !targetIsSram)
       return op->emitError("cannot lower a DRAM-to-DRAM memref.copy to the pustream dialect");
 
-    auto loc = op.getLoc();
+    auto loc   = op.getLoc();
     Value sram = sourceIsSram ? op.getSource() : op.getTarget();
     Value dram = sourceIsSram ? op.getTarget() : op.getSource();
 
-    auto tile = cast<MemRefType>(sram.getType());
-    Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
+    auto tile     = cast<MemRefType>(sram.getType());
+    Value zero    = arith::ConstantIndexOp::create(rewriter, loc, 0);
     auto slotType = pustream::SlotType::get(rewriter.getContext(), tile);
-    Value slot = pustream::SlotOp::create(rewriter, loc, slotType, sram, zero);
+    Value slot    = pustream::SlotOp::create(rewriter, loc, slotType, sram, zero);
 
     Value from = sourceIsSram ? slot : dram;
-    Value to = sourceIsSram ? dram : slot;
+    Value to   = sourceIsSram ? dram : slot;
     pustream::AsyncCopyOp::create(rewriter, loc, from, to);
     rewriter.eraseOp(op);
     return success();
