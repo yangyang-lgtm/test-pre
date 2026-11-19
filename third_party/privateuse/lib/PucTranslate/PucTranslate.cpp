@@ -41,6 +41,8 @@ std::string typeString(Type type)
       return home + typeString(p.getElemType()) + "*";
     })
     .Case<pumem::VoidType>([](pumem::VoidType) { return "void"; })
+    .Case<pumem::DmaHandleType>([](pumem::DmaHandleType) { return std::string("pumem_dma_handle_t"); })
+    .Case<pumem::DmaMetaType>([](pumem::DmaMetaType) { return std::string("pumem_dma_meta_t"); })
     .Case<IndexType>([](IndexType) { return "int64_t"; })
     .Case<IntegerType>([](IntegerType it) -> std::string {
       switch (it.getWidth()) {

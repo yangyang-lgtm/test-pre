@@ -14,6 +14,7 @@
 #include "privateuse/Transform/CollapseShape/Passes.h"
 #include "privateuse/Transform/LowerLinalgReduce/Passes.h"
 #include "privateuse/Transform/PidLoop/Passes.h"
+#include "privateuse/Transform/Pipeline/Passes.h"
 #include "privateuse/Transform/PucLaunchKernel/Passes.h"
 #include "privateuse/Transform/PucLocalizeCarried/PucLocalizeCarried.h"
 #include "privateuse/Transform/PucSimplifyAssign/PucSimplifyAssign.h"
@@ -153,6 +154,11 @@ void init_triton_privateuse(py::module_& m)
   );
 
   m.def("add_to_pustream", [](PassManager& pm) { pm.addPass(triton::createToPuStreamPass()); }, py::arg("pm"));
+
+  m.def(
+    "add_pipeline", [](PassManager& pm) { pm.addPass(triton::createPipelinePass()); },
+    py::arg("pm")
+  );
 
   m.def(
     "add_schedule_timepoints", [](PassManager& pm) { pm.addPass(triton::createScheduleTimepointsPass()); },

@@ -2,6 +2,7 @@ add_subdirectory(CollapseShape)
 add_subdirectory(LowerLinalgReduce)
 add_subdirectory(OutlineToDispatch)
 add_subdirectory(PidLoop)
+add_subdirectory(Pipeline)
 add_subdirectory(PucLaunchKernel)
 add_subdirectory(PucLocalizeCarried)
 add_subdirectory(PucSimplifyAssign)
@@ -16,6 +17,7 @@ add_triton_library(PrivateUseTransforms
   LowerLinalgReduceTransformPassIncGen
   OutlineToDispatchTransformPassIncGen
   PidLoopTransformPassIncGen
+  PipelineTransformPassIncGen
   PucLaunchKernelTransformPassIncGen
   PucLocalizeCarriedTransformPassIncGen
   PucSimplifyAssignTransformPassIncGen
@@ -29,6 +31,7 @@ add_triton_library(PrivateUseTransforms
   LowerLinalgReduce
   OutlineToDispatch
   PidLoop
+  Pipeline
   PucLaunchKernel
   PucLocalizeCarried
   PucSimplifyAssign

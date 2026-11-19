@@ -535,5 +535,52 @@ def PUMem_IfOp : PUMEM_Op<"if",
   let hasVerifier = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// Async stream support
+//===----------------------------------------------------------------------===//
+
+def PUMem_DmaHandleType : PUMEM_Type<"DmaHandle", "dma_handle"> {
+  let summary = "DMA sequence point of one SRAM slot";
+
+  let description = [{
+    The runtime object a slot wait blocks on. It records the last transfer that
+    read and the last one that wrote the slot, so waiting it means waiting every
+    transfer into or out of that slot.
+
+    Example: !pumem.dma_handle
+  }];
+}
+
+def PUMem_DmaMetaType : PUMEM_Type<"DmaMeta", "dma_meta"> {
+  let summary = "In-flight descriptor slot of one SRAM slot";
+
+  let description = [{
+    The metadata slot a transfer is registered in. It is busy from enqueue to
+    completion, so reusing it needs a wait in between.
+
+    Example: !pumem.dma_meta
+  }];
+}
+
+def PUMem_DmaHandle : Type<CPred<"::llvm::isa<::mlir::pumem::DmaHandleType>($_self)">,
+                            "a pumem DMA handle", "::mlir::pumem::DmaHandleType">;
+def PUMem_DmaMeta : Type<CPred<"::llvm::isa<::mlir::pumem::DmaMetaType>($_self)">,
+                          "a pumem DMA metadata slot", "::mlir::pumem::DmaMetaType">;
+
+def PUMem_DmaSlotOp : PUMEM_Op<"dma_slot", [Pure]> {
+  let summary = "Materialise the handle and metadata slot of one buffer";
+
+  let description = [{
+    One handle and one metadata slot per DMA participant buffer. The op is pure:
+    asking twice for the same buffer must yield the same pair, otherwise a wait
+    on one handle would miss transfers issued through the other.
+
+    Example:
+      %h, %m = pumem.dma_slot %buf : !pumem.ptr<f32, 128> -> !pumem.dma_handle, !pumem.dma_meta
+  }];
+  let arguments = (ins PUMem_Ptr:$buffer);
+  let results = (outs PUMem_DmaHandle:$handle, PUMem_DmaMeta:$meta);
+  let assemblyFormat = "$buffer attr-dict `:` type($buffer) `->` type($handle) `,` type($meta)";
+}
 
 #endif

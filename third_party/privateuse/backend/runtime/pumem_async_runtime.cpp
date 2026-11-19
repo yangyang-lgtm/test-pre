@@ -108,8 +108,6 @@ int compute_lanes()
 
 void run_lane(Lane& lane, bool is_compute);
 
-// RAII owner of the executor threads: starts them on first use and joins them
-// in its destructor. start() is idempotent, so every enqueue path can call it.
 class ThreadGuard
 {
 public:

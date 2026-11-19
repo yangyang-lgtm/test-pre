@@ -8,6 +8,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Interfaces/ViewLikeInterface.h"
 #include "privateuse/Dialect/PuStream/IR/PuStreamDialect.h"
+#include "privateuse/Utils/Constants.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -100,10 +101,34 @@ private:
 
   void visit(Operation* op)
   {
-    if (auto forOp = dyn_cast<scf::ForOp>(op)) return scheduleRegion(forOp.getRegion());
+    // A pipelined loop is owned by the pipeliner: it emitted its own per-slot
+    // waits and its store barrier, so scanning or draining it here would
+    // serialise every iteration and undo the overlap.
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      if (forOp->hasAttr(triton::kPipelinedAttr)) {
+        // The loop still leaves stores in flight, so the kernel exit drain is
+        // still this pass's job even though the body is not.
+        sawAsync = true;
+        return;
+      }
+      return scheduleRegion(forOp.getRegion());
+    }
     if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      // The two regions are alternatives, not a sequence: each has to start
+      // from the state before the if, otherwise the branch scheduled second
+      // loses the waits the first one already emitted inside itself.
+      const DenseMap<Value, Value> savedPending = pendingDma;
+      const SmallPtrSet<Value, 8> savedTouched   = computeTouched;
+      const bool savedCompute                    = computePending;
+
       scheduleRegion(ifOp.getThenRegion());
+
+      pendingDma     = savedPending;
+      computeTouched = savedTouched;
+      computePending = savedCompute;
       if (!ifOp.getElseRegion().empty()) scheduleRegion(ifOp.getElseRegion());
+
+      clearAll();
       return;
     }
     if (auto copy = dyn_cast<pustream::AsyncCopyOp>(op)) return handleCopy(copy);

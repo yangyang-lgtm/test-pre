@@ -136,6 +136,23 @@ struct StoreOpConversion : OpConversionPattern<pumem::StoreOp>
   }
 };
 
+struct DmaSlotOpConversion : OpConversionPattern<pumem::DmaSlotOp>
+{
+  using OpConversionPattern<pumem::DmaSlotOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    pumem::DmaSlotOp op, pumem::DmaSlotOp::Adaptor adaptor, ConversionPatternRewriter& rewriter
+  ) const override
+  {
+    // The handle and the metadata slot are mutable C++ objects the runtime
+    // writes into, so they become locals rather than SSA values.
+    auto handle = puc::LocalOp::create(rewriter, op.getLoc(), op.getHandle().getType(), Value{});
+    auto meta   = puc::LocalOp::create(rewriter, op.getLoc(), op.getMeta().getType(), Value{});
+    rewriter.replaceOp(op, {handle.getResult(), meta.getResult()});
+    return success();
+  }
+};
+
 struct CopyOpConversion : OpConversionPattern<pumem::CopyOp>
 {
   using OpConversionPattern<pumem::CopyOp>::OpConversionPattern;
@@ -303,7 +320,8 @@ void mlir::triton::populatePumemToPucPatterns(RewritePatternSet& patterns, TypeC
     PointCastOpConversion,
     LoadOpConversion,
     StoreOpConversion,
-    CopyOpConversion,
+    DmaSlotOpConversion,
+  CopyOpConversion,
     GatherOpConversion,
     ScatterOpConversion,
     RuntimeCallOpConversion,

@@ -6,6 +6,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "privateuse/Utils/Constants.h"
@@ -56,8 +57,9 @@ std::optional<int64_t> declaredStages(Value value)
 
 std::optional<int64_t> constantIndex(Value index)
 {
-  if (auto constant = index.getDefiningOp<arith::ConstantIndexOp>()) return constant.value();
-  if (auto constant = index.getDefiningOp<arith::ConstantIntOp>()) return constant.value();
+  Attribute value;
+  if (!matchPattern(index, m_Constant(&value))) return std::nullopt;
+  if (auto integer = dyn_cast<IntegerAttr>(value)) return integer.getInt();
   return std::nullopt;
 }
 
