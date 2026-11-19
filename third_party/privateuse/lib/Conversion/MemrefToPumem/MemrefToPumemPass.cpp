@@ -13,9 +13,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "privateuse/Conversion/Common/I1ToI8.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
-#include "privateuse/Dialect/PuStream/IR/PuStreamDialect.h"
 #include "privateuse/Utils/Constants.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
@@ -47,27 +45,9 @@ bool isOwnedAllocation(Value pointer)
   return definingOp && isa<AllocOp>(definingOp);
 }
 
-unsigned slotHandleIndex(unsigned rank)
-{
-  return 2 + 2 * rank;
-}
-
 unsigned getNumComponents(MemRefType type)
 {
-  return slotHandleIndex(type.getRank());
-}
-
-MemRefParts stageDescriptor(OpBuilder& builder, Location loc, const MemRefParts& buffer, MemRefType tile, Value index)
-{
-  if (buffer.sizes.size() == tile.getRank()) return buffer;
-
-  MemRefParts staged = buffer;
-  staged.offset      = arith::AddIOp::create(
-    builder, loc, buffer.offset, arith::MulIOp::create(builder, loc, index, buffer.strides.front())
-  );
-  staged.sizes.assign(buffer.sizes.begin() + 1, buffer.sizes.end());
-  staged.strides.assign(buffer.strides.begin() + 1, buffer.strides.end());
-  return staged;
+  return 2 + 2 * type.getRank();
 }
 
 bool hasMemRefTypes(Operation* op)
@@ -137,6 +117,7 @@ FailureOr<int64_t> getElementByteSize(Type type, Operation* op)
 
 Value materializeElementPtr(OpBuilder& builder, Location loc, const MemRefParts& parts, ValueRange indices)
 {
+  assert((indices.empty() || indices.size() == parts.strides.size()) && "index count must match the rank");
   Value offset = parts.offset;
   if (!indices.empty())
     for (auto [index, stride] : llvm::zip_equal(indices, parts.strides))
@@ -232,18 +213,8 @@ public:
     addConversion([](MemRefType type, SmallVectorImpl<Type>& results) -> LogicalResult {
       FailureOr<int64_t> space = getMemRefSpace(type);
       if (failed(space)) return failure();
-      results.push_back(PtrType::get(type.getContext(), triton::i1ToI8(type.getElementType()), *space));
+      results.push_back(PtrType::get(type.getContext(), type.getElementType(), *space));
       results.append(1 + 2 * type.getRank(), IndexType::get(type.getContext()));
-      return success();
-    });
-    addConversion([](pustream::SlotType type, SmallVectorImpl<Type>& results) -> LogicalResult {
-      MemRefType tile          = type.getTile();
-      FailureOr<int64_t> space = getMemRefSpace(tile);
-      if (failed(space)) return failure();
-      results.push_back(PtrType::get(tile.getContext(), triton::i1ToI8(tile.getElementType()), *space));
-      results.append(1 + 2 * tile.getRank(), IndexType::get(tile.getContext()));
-      results.push_back(DmaHandleType::get(tile.getContext()));
-      results.push_back(DmaMetaType::get(tile.getContext()));
       return success();
     });
   }
@@ -295,7 +266,7 @@ public:
     int64_t alignment = op.getAlignment().value_or(triton::kDefaultAlignment);
     auto voidPtrType  = PtrType::get(rewriter.getContext(), VoidType::get(rewriter.getContext()), *space);
     auto alloc        = AllocOp::create(rewriter, loc, voidPtrType, elements, constantIndex(rewriter, loc, alignment));
-    auto ptrType      = PtrType::get(rewriter.getContext(), triton::i1ToI8(type.getElementType()), *space);
+    auto ptrType      = PtrType::get(rewriter.getContext(), type.getElementType(), *space);
     Value base        = PointCastOp::create(rewriter, loc, ptrType, alloc.getResult());
 
     MemRefParts parts{base, constantIndex(rewriter, loc, staticOffset), std::move(sizes), std::move(strides)};
@@ -364,16 +335,13 @@ public:
   }
 };
 
-// ToPuStream owns every memref.copy: cross-space ones become pustream.async.copy,
-// SRAM-to-SRAM ones become pustream.sync.copy. What is left here is the latter,
-// which lowers to the same box copy the runtime already provides.
-class SyncCopyOpLowering : public OpConversionPattern<pustream::SyncCopyOp>
+class CopyOpLowering : public OpConversionPattern<memref::CopyOp>
 {
 public:
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(pustream::SyncCopyOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
+  matchAndRewrite(memref::CopyOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
     Location loc       = op.getLoc();
     auto sourceType    = cast<MemRefType>(op.getSource().getType());
@@ -744,6 +712,60 @@ public:
   }
 };
 
+class CallOpLowering : public OpConversionPattern<triton::CallOp>
+{
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  static bool unsetAttrs(NamedAttribute attr)
+  {
+    constexpr std::array<StringRef, 3> unsetNames{"callee", "arg_attrs", "res_attrs"};
+    StringRef name = attr.getName().getValue();
+    for (auto unsetName : unsetNames)
+      if (name == unsetName) return true;
+    return false;
+  }
+
+  LogicalResult
+  matchAndRewrite(triton::CallOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
+  {
+    SmallVector<Type> newResults;
+    SmallVector<size_t> resultCounts;
+    for (Type type : op.getResultTypes()) {
+      SmallVector<Type> converted;
+      if (failed(getTypeConverter()->convertTypes(type, converted)))
+        return rewriter.notifyMatchFailure(op, "cannot convert call result types");
+      newResults.append(converted.begin(), converted.end());
+      resultCounts.push_back(converted.size());
+    }
+
+    SmallVector<Value> operands = flattenValues(adaptor.getOperands());
+    auto newOp                  = func::CallOp::create(rewriter, op.getLoc(), op.getCalleeAttr(), newResults, operands);
+    for (NamedAttribute attr : op->getAttrs()) {
+      if (unsetAttrs(attr)) continue;
+      newOp->setAttr(attr.getName(), attr.getValue());
+    }
+
+    if (op.getArgAttrsAttr())
+      newOp.setArgAttrsAttr(
+        rewriter.getArrayAttr(expandAttrArray(op.getArgAttrsAttr(), op.getOperandTypes(), *getTypeConverter()))
+      );
+    if (op.getResAttrsAttr())
+      newOp.setResAttrsAttr(
+        rewriter.getArrayAttr(expandAttrArray(op.getResAttrsAttr(), op.getResultTypes(), *getTypeConverter()))
+      );
+
+    SmallVector<ValueRange> replacements;
+    unsigned offset = 0;
+    for (size_t count : resultCounts) {
+      replacements.push_back(newOp.getResults().slice(offset, count));
+      offset += count;
+    }
+    rewriter.replaceOpWithMultiple(op, replacements);
+    return success();
+  }
+};
+
 class ReturnOpLowering : public OpConversionPattern<triton::ReturnOp>
 {
 public:
@@ -758,253 +780,158 @@ public:
   }
 };
 
-class SlotOpLowering : public OpConversionPattern<pustream::SlotOp>
-{
-public:
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(pustream::SlotOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
-  {
-    Location loc       = op.getLoc();
-    auto bufferType    = cast<MemRefType>(op.getBuffer().getType());
-    MemRefType tile    = cast<pustream::SlotType>(op.getSlot().getType()).getTile();
-    MemRefParts buffer = unpackMemRef(adaptor.getBuffer(), bufferType);
-
-    auto dma =
-      DmaSlotOp::create(rewriter, loc, DmaHandleType::get(getContext()), DmaMetaType::get(getContext()), buffer.base);
-
-    SmallVector<Value> values = packMemRef(stageDescriptor(rewriter, loc, buffer, tile, adaptor.getIndex().front()));
-    values.push_back(dma.getHandle());
-    values.push_back(dma.getMeta());
-    rewriter.replaceOpWithMultiple(op, {values});
-    return success();
-  }
+// The launcher passes a bare pointer for every kernel argument, so the
+// descriptor of a memref entry argument only carries the statically known
+// layout of the pointer-derived memref (zero offset, natural strides). Keep
+// those components out of the exported signature. The base pointer must stay
+// even when the body ignores it, otherwise the remaining arguments would shift
+// out of the launcher's call order. Dynamic components (sizes of a pointer
+// argument) are not part of the launcher ABI either, but they cannot be
+// materialized as constants, so they are only dropped when unused.
+enum class EntryArgKind {
+  Keep,
+  Constant,
+  DropIfUnused,
 };
 
-class AsyncCopyOpLowering : public OpConversionPattern<pustream::AsyncCopyOp>
+struct EntryArg
 {
-public:
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(pustream::AsyncCopyOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
-  {
-    Location loc      = op.getLoc();
-    bool slotIsSource = isa<pustream::SlotType>(op.getSource().getType());
-
-    ValueRange slotValues = slotIsSource ? adaptor.getSource() : adaptor.getTarget();
-    ValueRange dramValues = slotIsSource ? adaptor.getTarget() : adaptor.getSource();
-
-    auto slotType       = cast<pustream::SlotType>(slotIsSource ? op.getSource().getType() : op.getTarget().getType());
-    auto dramType       = cast<MemRefType>(slotIsSource ? op.getTarget().getType() : op.getSource().getType());
-    MemRefType tileType = slotType.getTile();
-
-    unsigned handle  = slotHandleIndex(tileType.getRank());
-    MemRefParts tile = unpackMemRef(slotValues.take_front(handle), tileType);
-    MemRefParts dram = unpackMemRef(dramValues, dramType);
-
-    FailureOr<int64_t> elementBytes = getElementByteSize(dramType.getElementType(), op);
-    if (failed(elementBytes)) return op.emitError("cannot determine the byte size of the element type");
-
-    Value slotPtr = materializeElementPtr(rewriter, loc, tile, {});
-    Value dramPtr = materializeElementPtr(rewriter, loc, dram, {});
-    Value dstPtr  = slotIsSource ? dramPtr : slotPtr;
-    Value srcPtr  = slotIsSource ? slotPtr : dramPtr;
-
-    ValueRange dstStrides = slotIsSource ? ValueRange(dram.strides) : ValueRange(tile.strides);
-    ValueRange srcStrides = slotIsSource ? ValueRange(tile.strides) : ValueRange(dram.strides);
-
-    Value elemBytes = constantIndex(rewriter, loc, *elementBytes);
-    SmallVector<Value> operands{slotValues[handle], slotValues[handle + 1], dstPtr, srcPtr, elemBytes};
-    operands.append(dram.sizes.begin(), dram.sizes.end());
-    operands.append(dstStrides.begin(), dstStrides.end());
-    operands.append(srcStrides.begin(), srcStrides.end());
-
-    auto templateArgs  = rewriter.getArrayAttr({rewriter.getIndexAttr(dramType.getRank())});
-    const char* callee = slotIsSource ? "async_copy_sram_to_dram" : "async_copy_dram_to_sram";
-    RuntimeCallOp::create(
-      rewriter, loc, TypeRange{}, FlatSymbolRefAttr::get(getContext(), callee), templateArgs, operands
-    );
-    rewriter.eraseOp(op);
-    return success();
-  }
+  EntryArgKind kind;
+  int64_t value;
 };
 
-class DispatchOpLowering : public OpConversionPattern<pustream::AsyncDispatchOp>
+using EntryConstants = llvm::DenseMap<StringAttr, SmallVector<EntryArg>>;
+
+EntryArg entryConstant(int64_t value)
 {
-public:
-  using OpConversionPattern::OpConversionPattern;
+  if (value == ShapedType::kDynamic) return {EntryArgKind::DropIfUnused, 0};
+  return {EntryArgKind::Constant, value};
+}
 
-  LogicalResult matchAndRewrite(
-    pustream::AsyncDispatchOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter
-  ) const override
-  {
-    bool reachesOutlined = isa_and_nonnull<func::FuncOp>(SymbolTable::lookupNearestSymbolFrom(op, op.getCalleeAttr()));
+EntryConstants collectEntryConstants(ModuleOp module)
+{
+  EntryConstants constants;
+  module.walk([&](triton::FuncOp func) {
+    if (!func.isPublic() || func.isExternal()) return;
+    std::optional<SymbolTable::UseRange> uses = SymbolTable::getSymbolUses(func, module);
+    if (!uses || !uses->empty()) return;
 
-    SmallVector<Value> operands;
-    for (auto [index, argument] : llvm::enumerate(op.getArgs()))
-      appendCallOperand(rewriter, op.getLoc(), argument, adaptor.getArgs()[index], reachesOutlined, operands);
-
-    RuntimeCallOp::create(rewriter, op.getLoc(), TypeRange{}, op.getCalleeAttr(), op.getTemplateArgsAttr(), operands);
-    rewriter.eraseOp(op);
-    return success();
-  }
-
-private:
-  static void appendCallOperand(
-    OpBuilder& builder, Location loc, Value argument, ValueRange converted, bool outlined,
-    SmallVectorImpl<Value>& operands
-  )
-  {
-    MemRefType buffer;
-    ValueRange descriptor = converted;
-    if (auto slot = dyn_cast<pustream::SlotType>(argument.getType())) {
-      buffer     = slot.getTile();
-      descriptor = converted.take_front(slotHandleIndex(buffer.getRank()));
-    } else {
-      buffer = dyn_cast<MemRefType>(argument.getType());
+    SmallVector<EntryArg> values;
+    for (Type input : cast<FunctionType>(func.getFunctionType()).getInputs()) {
+      auto type = dyn_cast<MemRefType>(input);
+      SmallVector<int64_t> strides;
+      int64_t offset = ShapedType::kDynamic;
+      if (!type || failed(type.getStridesAndOffset(strides, offset))) {
+        values.push_back({EntryArgKind::Keep, 0});
+        continue;
+      }
+      values.push_back({EntryArgKind::Keep, 0});
+      values.push_back(entryConstant(offset));
+      values.append(type.getRank(), {EntryArgKind::DropIfUnused, 0});
+      for (int64_t stride : strides) values.push_back(entryConstant(stride));
     }
+    constants[func.getNameAttr()] = std::move(values);
+  });
+  return constants;
+}
 
-    if (!buffer) {
-      operands.push_back(converted.front());
-      return;
+LogicalResult foldEntryConstants(ModuleOp module, const EntryConstants& constants)
+{
+  WalkResult result = module.walk([&](func::FuncOp func) -> WalkResult {
+    auto it = constants.find(func.getNameAttr());
+    if (it == constants.end()) return WalkResult::advance();
+    if (it->second.size() != func.getNumArguments())
+      return func->emitError("kernel signature does not match the entry memref descriptors");
+
+    Block& body = func.getBody().front();
+    OpBuilder builder(&body, body.begin());
+    llvm::BitVector dead(func.getNumArguments());
+    for (auto [index, entry] : llvm::enumerate(it->second)) {
+      Value argument = func.getArgument(index);
+      switch (entry.kind) {
+        case EntryArgKind::Keep: break;
+        case EntryArgKind::Constant:
+          argument.replaceAllUsesWith(constantIndex(builder, func.getLoc(), entry.value));
+          dead.set(index);
+          break;
+        case EntryArgKind::DropIfUnused:
+          if (argument.use_empty()) dead.set(index);
+          break;
+      }
     }
-    if (outlined) {
-      llvm::append_range(operands, descriptor);
-      return;
+    if (dead.none()) return WalkResult::advance();
+    if (failed(func.eraseArguments(dead))) return func->emitError("failed to erase descriptor arguments");
+    return WalkResult::advance();
+  });
+  return failure(result.wasInterrupted());
+}
+
+// The memref tuple expansion keeps descriptor components as function
+// arguments even when the body never reads them. Private outlined functions
+// are only called from this module, so drop their dead arguments together with
+// the matching call operands. Public entries keep their launcher ABI and are
+// handled by foldEntryConstants instead.
+LogicalResult eraseDeadArguments(ModuleOp module)
+{
+  struct Update
+  {
+    func::FuncOp func;
+    llvm::BitVector dead;
+  };
+  SmallVector<Update> updates;
+  module.walk([&](func::FuncOp func) {
+    if (func.isExternal() || func.isPublic()) return;
+    llvm::BitVector dead(func.getNumArguments());
+    for (auto [i, arg] : llvm::enumerate(func.getArguments()))
+      if (arg.use_empty()) dead.set(i);
+    if (dead.none()) return;
+    std::optional<SymbolTable::UseRange> uses = SymbolTable::getSymbolUses(func, module);
+    if (!uses) return;
+    for (SymbolTable::SymbolUse use : *uses)
+      if (!isa<func::CallOp>(use.getUser())) return;
+    updates.push_back({func, dead});
+  });
+
+  for (Update& update : updates) {
+    std::optional<SymbolTable::UseRange> uses = SymbolTable::getSymbolUses(update.func, module);
+    if (!uses) return update.func->emitError("lost the symbol uses of a private function");
+    for (SymbolTable::SymbolUse use : *uses) {
+      auto call = cast<func::CallOp>(use.getUser());
+      SmallVector<Value> operands;
+      for (auto [i, operand] : llvm::enumerate(call.getOperands()))
+        if (!update.dead.test(i)) operands.push_back(operand);
+      call.getOperandsMutable().assign(operands);
     }
-    operands.push_back(materializeElementPtr(builder, loc, unpackMemRef(descriptor, buffer), {}));
+    if (failed(update.func.eraseArguments(update.dead)))
+      return update.func->emitError("failed to erase dead arguments");
   }
-};
-
-class WaitOpLowering : public OpConversionPattern<pustream::WaitOp>
-{
-public:
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(pustream::WaitOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
-  {
-    MemRefType tile = cast<pustream::SlotType>(op.getSlot().getType()).getTile();
-    Value handle    = adaptor.getSlot()[slotHandleIndex(tile.getRank())];
-    RuntimeCallOp::create(
-      rewriter, op.getLoc(), TypeRange{}, FlatSymbolRefAttr::get(getContext(), "pumem_wait"), ArrayAttr{},
-      ValueRange{handle}
-    );
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
-
-class WaitDispatchOpLowering : public OpConversionPattern<pustream::WaitDispatchOp>
-{
-public:
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(
-    pustream::WaitDispatchOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter
-  ) const override
-  {
-    RuntimeCallOp::create(
-      rewriter, op.getLoc(), TypeRange{}, FlatSymbolRefAttr::get(getContext(), "pumem_wait_dispatch"), ArrayAttr{},
-      ValueRange{}
-    );
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
-
-class SyncOpLowering : public OpConversionPattern<pustream::SyncOp>
-{
-public:
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(pustream::SyncOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
-  {
-    RuntimeCallOp::create(
-      rewriter, op.getLoc(), TypeRange{}, FlatSymbolRefAttr::get(getContext(), "pumem_sync"), ArrayAttr{}, ValueRange{}
-    );
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
-
-class CastOpReconcile : public OpConversionPattern<UnrealizedConversionCastOp>
-{
-public:
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(
-    UnrealizedConversionCastOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter
-  ) const override
-  {
-    if (op.getInputs().size() != 1 || op.getOutputs().size() != 1) return failure();
-
-    SmallVector<Type> results;
-    if (failed(getTypeConverter()->convertType(op.getOutputs().front().getType(), results))) return failure();
-
-    ValueRange converted = adaptor.getOperands().front();
-    if (converted.size() != results.size()) return failure();
-    for (auto [value, type] : llvm::zip_equal(converted, results))
-      if (value.getType() != type) return op.emitError("cannot reconcile a remaining conversion cast here");
-
-    rewriter.replaceOpWithMultiple(op, {converted});
-    return success();
-  }
-};
+  return success();
+}
 
 struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
 {
   using MemrefToPumemBase::MemrefToPumemBase;
-
-  enum class EntryArgKind { Keep, Constant, DropIfUnused };
-  struct EntryArg
-  {
-    EntryArgKind kind;
-    int64_t value;
-  };
-  using EntryConstants = llvm::DenseMap<StringAttr, SmallVector<EntryArg>>;
-
-  EntryArg entryConstant(int64_t value)
-  {
-    if (value == ShapedType::kDynamic) return {EntryArgKind::DropIfUnused, 0};
-    return {EntryArgKind::Constant, value};
-  }
 
   void runOnOperation() override
   {
     ModuleOp module = getOperation();
     if (failed(checkPreconditions(module))) return signalPassFailure();
 
-    EntryConstants entryConstants = collectEntryConstants();
+    EntryConstants entryConstants = collectEntryConstants(module);
     MemRefTupleTypeConverter converter;
     ConversionTarget target(getContext());
-
     target.markUnknownOpDynamicallyLegal([](Operation* op) { return !hasMemRefTypes(op); });
     target.addIllegalOp<triton::FuncOp, triton::CallOp, triton::ReturnOp>();
-    // Every memref.copy became a pustream statement in ToPuStream; one that survives
-    // here means a pass above us grew a copy behind our back.
-    target.addIllegalOp<memref::CopyOp>();
-    target.addIllegalDialect<pustream::PuStreamDialect>();
 
     RewritePatternSet patterns(&getContext());
     patterns.add<AllocOpLowering>(converter, &getContext());
     patterns.add<DeallocOpLowering>(converter, &getContext());
     patterns.add<LoadOpLowering>(converter, &getContext());
     patterns.add<StoreOpLowering>(converter, &getContext());
-    patterns.add<SyncCopyOpLowering>(converter, &getContext());
+    patterns.add<CopyOpLowering>(converter, &getContext());
     patterns.add<TileGatherOpLowering>(converter, &getContext());
     patterns.add<TileScatterOpLowering>(converter, &getContext());
     patterns.add<RuntimeCallOpLowering>(converter, &getContext());
-    patterns.add<SlotOpLowering>(converter, &getContext());
-    patterns.add<AsyncCopyOpLowering>(converter, &getContext());
-    patterns.add<DispatchOpLowering>(converter, &getContext());
-    patterns.add<WaitOpLowering>(converter, &getContext());
-    patterns.add<WaitDispatchOpLowering>(converter, &getContext());
-    patterns.add<SyncOpLowering>(converter, &getContext());
-    patterns.add<CastOpReconcile>(converter, &getContext());
     patterns.add<CastOpLowering>(converter, &getContext());
     patterns.add<DimOpLowering>(converter, &getContext());
     patterns.add<RankOpLowering>(converter, &getContext());
@@ -1014,6 +941,7 @@ struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
     patterns.add<IfOpLowering<scf::IfOp>, IfOpLowering<pumem::IfOp>>(converter, &getContext());
     patterns.add<YieldOpLowering<scf::YieldOp>, YieldOpLowering<pumem::YieldOp>>(converter, &getContext());
     patterns.add<FuncOpLowering>(converter, &getContext());
+    patterns.add<CallOpLowering>(converter, &getContext());
     patterns.add<ReturnOpLowering>(converter, &getContext());
     populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(patterns, converter);
     populateCallOpTypeConversionPattern(patterns, converter);
@@ -1021,68 +949,8 @@ struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
 
     if (failed(applyPartialConversion(module, target, std::move(patterns)))) return signalPassFailure();
 
-    if (failed(foldEntryConstants(entryConstants))) signalPassFailure();
-  }
-
-private:
-  EntryConstants collectEntryConstants()
-  {
-    ModuleOp module = getOperation();
-    EntryConstants constants;
-    module.walk([&](triton::FuncOp func) {
-      if (!func.isPublic() || func.isExternal()) return;
-      std::optional<SymbolTable::UseRange> uses = SymbolTable::getSymbolUses(func, module);
-      if (!uses || !uses->empty()) return;
-
-      SmallVector<EntryArg> values;
-      for (Type input : cast<FunctionType>(func.getFunctionType()).getInputs()) {
-        auto type = dyn_cast<MemRefType>(input);
-        SmallVector<int64_t> strides;
-        int64_t offset = ShapedType::kDynamic;
-        if (!type || failed(type.getStridesAndOffset(strides, offset))) {
-          values.push_back({EntryArgKind::Keep, 0});
-          continue;
-        }
-        values.push_back({EntryArgKind::Keep, 0});
-        values.push_back(entryConstant(offset));
-        values.append(type.getRank(), {EntryArgKind::DropIfUnused, 0});
-        for (int64_t stride : strides) values.push_back(entryConstant(stride));
-      }
-      constants[func.getNameAttr()] = std::move(values);
-    });
-    return constants;
-  }
-
-  LogicalResult foldEntryConstants(const EntryConstants& constants)
-  {
-    ModuleOp module   = getOperation();
-    WalkResult result = module.walk([&](func::FuncOp func) -> WalkResult {
-      auto it = constants.find(func.getNameAttr());
-      if (it == constants.end()) return WalkResult::advance();
-      if (it->second.size() != func.getNumArguments())
-        return func->emitError("kernel signature does not match the entry memref descriptors");
-
-      Block& body = func.getBody().front();
-      OpBuilder builder(&body, body.begin());
-      llvm::BitVector dead(func.getNumArguments());
-      for (auto [index, entry] : llvm::enumerate(it->second)) {
-        Value argument = func.getArgument(index);
-        switch (entry.kind) {
-          case EntryArgKind::Keep: break;
-          case EntryArgKind::Constant:
-            argument.replaceAllUsesWith(constantIndex(builder, func.getLoc(), entry.value));
-            dead.set(index);
-            break;
-          case EntryArgKind::DropIfUnused:
-            if (argument.use_empty()) dead.set(index);
-            break;
-        }
-      }
-      if (dead.none()) return WalkResult::advance();
-      if (failed(func.eraseArguments(dead))) return func->emitError("failed to erase descriptor arguments");
-      return WalkResult::advance();
-    });
-    return failure(result.wasInterrupted());
+    if (failed(foldEntryConstants(module, entryConstants))) signalPassFailure();
+    if (failed(eraseDeadArguments(module))) signalPassFailure();
   }
 };
 

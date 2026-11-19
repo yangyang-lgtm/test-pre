@@ -16,11 +16,9 @@ add_triton_plugin(TritonPrivateUse ${CMAKE_CURRENT_SOURCE_DIR}/privateuse.cc LIN
   PUMemIR
   PuArithIR
   PuMathIR
-  PuStreamIR
   PucIR
   ArithToPuarith
   MathToPumath
-  ToPuStream
   ScfToPumem
   ${conversion_libs}
   ${extension_libs}

@@ -2,24 +2,19 @@
 #include "privateuse/Conversion/ArithToLinalg/Passes.h"
 #include "privateuse/Conversion/Bufferize/Passes.h"
 #include "privateuse/Conversion/MemrefToPumem/Passes.h"
-#include "privateuse/Conversion/ToPuStream/Passes.h"
 #include "privateuse/Conversion/ToPuc/Passes.h"
 #include "privateuse/Conversion/MathToPumath/MathToPumath.h"
 #include "privateuse/Conversion/ArithToPuarith/ArithToPuarith.h"
 #include "privateuse/Conversion/ScfToPumem/ScfToPumem.h"
-#include "privateuse/Transform/OutlineToDispatch/Passes.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
-#include "privateuse/Dialect/PuStream/IR/PuStreamDialect.h"
 #include "privateuse/Dialect/Puc/IR/PucDialect.h"
 #include "privateuse/Transform/CollapseShape/Passes.h"
 #include "privateuse/Transform/LowerLinalgReduce/Passes.h"
 #include "privateuse/Transform/PidLoop/Passes.h"
-#include "privateuse/Transform/Pipeline/Passes.h"
 #include "privateuse/Transform/PucLaunchKernel/Passes.h"
 #include "privateuse/Transform/PucLocalizeCarried/PucLocalizeCarried.h"
 #include "privateuse/Transform/PucSimplifyAssign/PucSimplifyAssign.h"
 #include "privateuse/Transform/PucVoidPtrArgs/PucVoidPtrArgs.h"
-#include "privateuse/Transform/ScheduleTimepoints/Passes.h"
 #include "privateuse/Transform/SinkConstantCallArgs/Passes.h"
 #include "privateuse/Transform/SpecializeKernel/SpecializeKernel.h"
 #include "privateuse/Utils/AccessAnalysis/Passes.h"
@@ -74,7 +69,6 @@ void init_triton_privateuse(py::module_& m)
     // clang-format off
     registry.insert<
         mlir::pumem::PUMemDialect,
-        mlir::pustream::PuStreamDialect,
         mlir::puc::PucDialect,
         mlir::triton::TritonDialect,
         mlir::func::FuncDialect,
@@ -147,23 +141,9 @@ void init_triton_privateuse(py::module_& m)
 
   m.def("add_scf_to_pumem", [](PassManager& pm) { pm.addPass(triton::createScfToPumemPass()); }, py::arg("pm"));
 
-  m.def(
-    "add_outline_to_dispatch",
-    [](PassManager& pm, const std::string& attrValue) { pm.addPass(triton::createOutlineToDispatchPass(attrValue)); },
-    py::arg("pm"), py::arg("attr_value") = ""
-  );
 
-  m.def("add_to_pustream", [](PassManager& pm) { pm.addPass(triton::createToPuStreamPass()); }, py::arg("pm"));
 
-  m.def(
-    "add_pipeline", [](PassManager& pm) { pm.addPass(triton::createPipelinePass()); },
-    py::arg("pm")
-  );
 
-  m.def(
-    "add_schedule_timepoints", [](PassManager& pm) { pm.addPass(triton::createScheduleTimepointsPass()); },
-    py::arg("pm")
-  );
 
   m.def(
     "add_lower_linalg_reduce", [](PassManager& pm) { pm.addPass(triton::createLowerLinalgReducePass()); }, py::arg("pm")

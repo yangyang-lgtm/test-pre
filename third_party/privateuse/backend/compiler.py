@@ -132,7 +132,6 @@ class LoweringPipeline:
         module = self._parse_ir(kernel_ir)
         module = self._specialize(module, grid, constants)
         module = self._fuse_and_bufferize(module)
-        module = self._lower_to_stream(module)
         print(module)
         module = self._transform(module)
         module = self._lower_to_pumem(module)
@@ -200,18 +199,6 @@ class LoweringPipeline:
         privateuse.add_bufferize(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(module, 'fuse_and_bufferize')
-        return module
-
-    def _lower_to_stream(self, module):
-        pm = ir.pass_manager(module.context)
-        pm.enable_debug()
-        privateuse.add_to_pustream(pm)
-        privateuse.add_outline_to_dispatch(pm, self.outlined_attr)
-        privateuse.add_pipeline(pm)
-        privateuse.add_schedule_timepoints(pm)
-        passes.common.add_canonicalizer(pm)
-        passes.common.add_cse(pm)
-        pm.run(module, 'lower_to_stream')
         return module
 
     def _transform(self, module):

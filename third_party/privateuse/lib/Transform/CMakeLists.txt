@@ -1,13 +1,10 @@
 add_subdirectory(CollapseShape)
 add_subdirectory(LowerLinalgReduce)
-add_subdirectory(OutlineToDispatch)
 add_subdirectory(PidLoop)
-add_subdirectory(Pipeline)
 add_subdirectory(PucLaunchKernel)
 add_subdirectory(PucLocalizeCarried)
 add_subdirectory(PucSimplifyAssign)
 add_subdirectory(PucVoidPtrArgs)
-add_subdirectory(ScheduleTimepoints)
 add_subdirectory(SinkConstantCallArgs)
 add_subdirectory(SpecializeKernel)
 
@@ -15,28 +12,22 @@ add_triton_library(PrivateUseTransforms
   DEPENDS
   CollapseShapeTransformPassIncGen
   LowerLinalgReduceTransformPassIncGen
-  OutlineToDispatchTransformPassIncGen
   PidLoopTransformPassIncGen
-  PipelineTransformPassIncGen
   PucLaunchKernelTransformPassIncGen
   PucLocalizeCarriedTransformPassIncGen
   PucSimplifyAssignTransformPassIncGen
   PucVoidPtrArgsTransformPassIncGen
-  ScheduleTimepointsTransformPassIncGen
   SinkConstantCallArgsTransformPassIncGen
   SpecializeKernelTransformPassIncGen
 
   LINK_LIBS PUBLIC
   CollapseShape
   LowerLinalgReduce
-  OutlineToDispatch
   PidLoop
-  Pipeline
   PucLaunchKernel
   PucLocalizeCarried
   PucSimplifyAssign
   PucVoidPtrArgs
-  ScheduleTimepoints
   SinkConstantCallArgs
   SpecializeKernel
 )
