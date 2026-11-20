@@ -575,10 +575,15 @@ def PUMem_DmaSlotOp : PUMEM_Op<"dma_slot", [Pure]> {
     asking twice for the same buffer must yield the same pair, otherwise a wait
     on one handle would miss transfers issued through the other.
 
+    The operand is the buffer the transfers work on. Before the memref
+    conversion has run that is still a memref; converting the op then only means
+    turning the value into the element pointer, which is what the handle stands
+    for anyway.
+
     Example:
       %h, %m = pumem.dma_slot %buf : !pumem.ptr<f32, 128> -> !pumem.dma_handle, !pumem.dma_meta
   }];
-  let arguments = (ins PUMem_Ptr:$buffer);
+  let arguments = (ins AnyType:$buffer);
   let results = (outs PUMem_DmaHandle:$handle, PUMem_DmaMeta:$meta);
   let assemblyFormat = "$buffer attr-dict `:` type($buffer) `->` type($handle) `,` type($meta)";
 }

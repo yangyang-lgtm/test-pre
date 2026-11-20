@@ -42,6 +42,7 @@
 #include "privateuse/Conversion/Bufferize/Passes.h"
 #include "privateuse/Conversion/MathToPumath/Passes.h"
 #include "privateuse/Conversion/MemrefToPumem/Passes.h"
+#include "privateuse/Conversion/PustreamToPumem/Passes.h"
 #include "privateuse/Conversion/ScfToPumem/Passes.h"
 #include "privateuse/Conversion/ToPuc/Passes.h"
 #include "privateuse/Dialect/PuArith/IR/PuArithDialect.h"
@@ -89,6 +90,7 @@ inline void registerPrivateUseDialects(mlir::DialectRegistry& registry)
   mlir::triton::registerBufferizePasses();
   mlir::triton::registerMathToPumathPass();
   mlir::triton::registerMemrefToPumemPasses();
+  mlir::triton::registerPustreamToPumemPasses();
   mlir::triton::registerScfToPumemPass();
   mlir::triton::registerToPucPasses();
   mlir::triton::registerLowerLinalgReducePasses();

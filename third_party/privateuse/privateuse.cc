@@ -2,6 +2,7 @@
 #include "privateuse/Conversion/ArithToLinalg/Passes.h"
 #include "privateuse/Conversion/Bufferize/Passes.h"
 #include "privateuse/Conversion/MemrefToPumem/Passes.h"
+#include "privateuse/Conversion/PustreamToPumem/Passes.h"
 #include "privateuse/Conversion/ToPuc/Passes.h"
 #include "privateuse/Conversion/MathToPumath/MathToPumath.h"
 #include "privateuse/Conversion/ArithToPuarith/ArithToPuarith.h"
@@ -176,6 +177,11 @@ void init_triton_privateuse(py::module_& m)
   m.def("add_memref_expand", [](PassManager& pm) { pm.addPass(memref::createExpandOpsPass()); }, py::arg("pm"));
 
   m.def("add_lower_affine", [](PassManager& pm) { pm.addPass(mlir::createLowerAffinePass()); }, py::arg("pm"));
+
+  m.def(
+    "add_pustream_to_pumem", [](PassManager& pm) { pm.addPass(triton::createPustreamToPumemPass()); },
+    py::arg("pm")
+  );
 
   m.def("add_memref_to_pumem", [](PassManager& pm) { pm.addPass(triton::createMemrefToPumemPass()); }, py::arg("pm"));
 

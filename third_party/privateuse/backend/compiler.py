@@ -228,6 +228,7 @@ class LoweringPipeline:
         privateuse.add_expand_strided_metadata(pm)
         privateuse.add_memref_expand(pm)
         privateuse.add_lower_affine(pm)
+        privateuse.add_pustream_to_pumem(pm)
         privateuse.add_memref_to_pumem(pm)
         privateuse.add_sink_constant_call_args(pm)
         privateuse.add_arith_to_puarith(pm)

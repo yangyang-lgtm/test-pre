@@ -14,6 +14,7 @@
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "privateuse/Conversion/Common/I1ToI8.h"
+#include "privateuse/Conversion/Common/MemRefParts.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
 #include "privateuse/Utils/Constants.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -25,14 +26,6 @@ using namespace mlir;
 using namespace mlir::pumem;
 
 namespace {
-
-struct MemRefParts
-{
-  Value base;
-  Value offset;
-  SmallVector<Value> sizes;
-  SmallVector<Value> strides;
-};
 
 bool containsMemRefType(Type type)
 {
@@ -68,65 +61,11 @@ bool hasMemRefTypes(Operation* op)
   return false;
 }
 
-MemRefParts unpackMemRef(ValueRange flat, MemRefType type)
-{
-  unsigned rank = type.getRank();
-  MemRefParts parts;
-  parts.base   = flat[0];
-  parts.offset = flat[1];
-  parts.sizes.append(flat.begin() + 2, flat.begin() + 2 + rank);
-  parts.strides.append(flat.begin() + 2 + rank, flat.end());
-  return parts;
-}
-
-SmallVector<Value> packMemRef(const MemRefParts& parts)
-{
-  SmallVector<Value> flat{parts.base, parts.offset};
-  flat.append(parts.sizes.begin(), parts.sizes.end());
-  flat.append(parts.strides.begin(), parts.strides.end());
-  return flat;
-}
-
 SmallVector<Value> flattenValues(ArrayRef<ValueRange> values)
 {
   SmallVector<Value> flat;
   for (ValueRange value : values) flat.append(value.begin(), value.end());
   return flat;
-}
-
-Value constantIndex(OpBuilder& builder, Location loc, int64_t value)
-{
-  return arith::ConstantIndexOp::create(builder, loc, value);
-}
-
-FailureOr<int64_t> getMemRefSpace(MemRefType type)
-{
-  Attribute space = type.getMemorySpace();
-  if (!space) return triton::kDramSpace;
-  if (auto intSpace = dyn_cast<IntegerAttr>(space)) return intSpace.getInt();
-  return failure();
-}
-
-FailureOr<int64_t> getElementByteSize(Type type, Operation* op)
-{
-  auto module = op->getParentOfType<ModuleOp>();
-  if (!module) return failure();
-  llvm::TypeSize size = DataLayout(module).getTypeSizeInBits(type);
-  if (size.isScalable() || size.getFixedValue() == 0) return failure();
-  return (size.getFixedValue() + 7) / 8;
-}
-
-Value materializeElementPtr(OpBuilder& builder, Location loc, const MemRefParts& parts, ValueRange indices)
-{
-  assert((indices.empty() || indices.size() == parts.strides.size()) && "index count must match the rank");
-  Value offset = parts.offset;
-  if (!indices.empty())
-    for (auto [index, stride] : llvm::zip_equal(indices, parts.strides))
-      offset = arith::AddIOp::create(builder, loc, offset, arith::MulIOp::create(builder, loc, index, stride));
-  if (indices.empty()) {
-    if (auto constant = getConstantIntValue(offset); constant && *constant == 0) return parts.base;
-  }
-  return AddPtrOp::create(builder, loc, parts.base.getType(), parts.base, offset);
 }
 
 SmallVector<Value>
@@ -273,6 +212,24 @@ public:
     MemRefParts parts{base, constantIndex(rewriter, loc, staticOffset), std::move(sizes), std::move(strides)};
     SmallVector<Value> tuple = packMemRef(parts);
     rewriter.replaceOpWithMultiple(op, {tuple});
+    return success();
+  }
+};
+
+class DmaSlotOpLowering : public OpConversionPattern<DmaSlotOp>
+{
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(DmaSlotOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
+  {
+    auto type = dyn_cast<MemRefType>(op.getBuffer().getType());
+    if (!type) return op.emitError("expected a memref buffer");
+
+    Value ptr = materializeElementPtr(rewriter, op.getLoc(), unpackMemRef(adaptor.getBuffer(), type), {});
+    auto slot = DmaSlotOp::create(rewriter, op.getLoc(), op.getHandle().getType(), op.getMeta().getType(), ptr);
+    rewriter.replaceOp(op, slot.getResults());
     return success();
   }
 };
@@ -691,7 +648,6 @@ public:
   }
 };
 
-
 class FuncOpLowering : public OpConversionPattern<triton::FuncOp>
 {
 public:
@@ -853,6 +809,7 @@ struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
 
     RewritePatternSet patterns(&getContext());
     patterns.add<AllocOpLowering>(converter, &getContext());
+    patterns.add<DmaSlotOpLowering>(converter, &getContext());
     patterns.add<DeallocOpLowering>(converter, &getContext());
     patterns.add<LoadOpLowering>(converter, &getContext());
     patterns.add<StoreOpLowering>(converter, &getContext());
