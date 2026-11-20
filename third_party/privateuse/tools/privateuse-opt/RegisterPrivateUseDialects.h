@@ -47,10 +47,10 @@
 #include "privateuse/Dialect/PuArith/IR/PuArithDialect.h"
 #include "privateuse/Dialect/PuMath/IR/PuMathDialect.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
+#include "privateuse/Dialect/PuStream/IR/PuStreamDialect.h"
 #include "privateuse/Dialect/Puc/IR/PucDialect.h"
 #include "privateuse/Transform/LowerLinalgReduce/Passes.h"
-#include "privateuse/Transform/LinalgOutline/Passes.h"
-#include "privateuse/Transform/LinalgToRuntime/Passes.h"
+#include "privateuse/Transform/MemrefToPuStream/Passes.h"
 #include "privateuse/Transform/PidLoop/Passes.h"
 #include "privateuse/Transform/PucLaunchKernel/Passes.h"
 #include "privateuse/Transform/PucLocalizeCarried/Passes.h"
@@ -92,8 +92,7 @@ inline void registerPrivateUseDialects(mlir::DialectRegistry& registry)
   mlir::triton::registerScfToPumemPass();
   mlir::triton::registerToPucPasses();
   mlir::triton::registerLowerLinalgReducePasses();
-  mlir::triton::registerLinalgOutlinePasses();
-  mlir::triton::registerLinalgToRuntimePasses();
+  mlir::triton::registerMemrefToPuStreamPasses();
   mlir::triton::registerPidLoopPasses();
   mlir::triton::registerPucLaunchKernelPasses();
   mlir::triton::registerPucLocalizeCarriedPass();
@@ -104,6 +103,7 @@ inline void registerPrivateUseDialects(mlir::DialectRegistry& registry)
   // clang-format off
   registry.insert<
       mlir::pumem::PUMemDialect,
+      mlir::pustream::PuStreamDialect,
       mlir::puarith::PuArithDialect,
       mlir::pumath::PuMathDialect,
       mlir::puc::PucDialect,

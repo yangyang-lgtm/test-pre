@@ -14,6 +14,7 @@ add_triton_plugin(TritonPrivateUse ${CMAKE_CURRENT_SOURCE_DIR}/privateuse.cc LIN
   PrivateUseToPuc
   PucTranslate
   PUMemIR
+  PuStreamIR
   PuArithIR
   PuMathIR
   PucIR

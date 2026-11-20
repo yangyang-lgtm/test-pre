@@ -7,11 +7,11 @@
 #include "privateuse/Conversion/ArithToPuarith/ArithToPuarith.h"
 #include "privateuse/Conversion/ScfToPumem/ScfToPumem.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
+#include "privateuse/Dialect/PuStream/IR/PuStreamDialect.h"
 #include "privateuse/Dialect/Puc/IR/PucDialect.h"
 #include "privateuse/Transform/CollapseShape/Passes.h"
 #include "privateuse/Transform/LowerLinalgReduce/Passes.h"
-#include "privateuse/Transform/LinalgOutline/Passes.h"
-#include "privateuse/Transform/LinalgToRuntime/Passes.h"
+#include "privateuse/Transform/MemrefToPuStream/Passes.h"
 #include "privateuse/Transform/PidLoop/Passes.h"
 #include "privateuse/Transform/PucLaunchKernel/Passes.h"
 #include "privateuse/Transform/PucLocalizeCarried/PucLocalizeCarried.h"
@@ -66,21 +66,12 @@ void init_triton_privateuse(py::module_& m)
 {
   m.doc() = "Python bindings to the privateuse backend";
 
-  m.def(
-    "add_linalg_to_runtime", [](PassManager& pm) { pm.addPass(triton::createLinalgToRuntimePass()); }, py::arg("pm")
-  );
-
-  m.def(
-    "add_linalg_outline",
-    [](PassManager& pm, const std::string& outlinedAttr) { pm.addPass(triton::createLinalgOutlinePass(outlinedAttr)); },
-    py::arg("pm"), py::arg("outlined_attr") = "OUTLINED"
-  );
-
   m.def("load_dialects", [](mlir::MLIRContext& context) {
     mlir::DialectRegistry registry;
     // clang-format off
     registry.insert<
         mlir::pumem::PUMemDialect,
+        mlir::pustream::PuStreamDialect,
         mlir::puc::PucDialect,
         mlir::triton::TritonDialect,
         mlir::func::FuncDialect,
@@ -139,6 +130,14 @@ void init_triton_privateuse(py::module_& m)
   m.def(
     "add_lower_unstructured_access", [](PassManager& pm) { pm.addPass(triton::createLowerUnstructuredAccessPass()); },
     py::arg("pm")
+  );
+
+  m.def(
+    "add_memref_to_pustream",
+    [](PassManager& pm, const std::string& outlinedAttr) {
+      pm.addPass(triton::createMemrefToPuStreamPass(outlinedAttr));
+    },
+    py::arg("pm"), py::arg("outlined_attr") = "OUTLINED"
   );
 
   m.def("add_ptr_to_memref", [](PassManager& pm) { pm.addPass(triton::createPtrToMemrefPass()); }, py::arg("pm"));

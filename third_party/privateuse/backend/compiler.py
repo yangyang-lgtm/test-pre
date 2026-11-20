@@ -205,8 +205,7 @@ class LoweringPipeline:
     def _outline_computes(self, module):
         pm = ir.pass_manager(module.context)
         pm.enable_debug()
-        privateuse.add_linalg_to_runtime(pm)
-        privateuse.add_linalg_outline(pm, self.outlined_attr)
+        privateuse.add_memref_to_pustream(pm, self.outlined_attr)
         pm.run(module, 'outline_computes')
         return module
 

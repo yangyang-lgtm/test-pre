@@ -1,4 +1,5 @@
 add_subdirectory(PUMem)
+add_subdirectory(PuStream)
 add_subdirectory(PuArith)
 add_subdirectory(PuMath)
 add_subdirectory(Puc)

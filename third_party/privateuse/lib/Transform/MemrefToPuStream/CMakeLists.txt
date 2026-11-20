@@ -1,8 +1,8 @@
-add_triton_library(LinalgOutline
-  LinalgOutlinePass.cpp
+add_triton_library(MemrefToPuStream
+  MemrefToPuStreamPass.cpp
 
   DEPENDS
-  LinalgOutlineTransformPassIncGen
+  MemrefToPuStreamTransformPassIncGen
 
   LINK_LIBS PUBLIC
   MLIRFuncDialect
