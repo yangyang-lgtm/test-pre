@@ -49,6 +49,8 @@
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
 #include "privateuse/Dialect/Puc/IR/PucDialect.h"
 #include "privateuse/Transform/LowerLinalgReduce/Passes.h"
+#include "privateuse/Transform/LinalgOutline/Passes.h"
+#include "privateuse/Transform/LinalgToRuntime/Passes.h"
 #include "privateuse/Transform/PidLoop/Passes.h"
 #include "privateuse/Transform/PucLaunchKernel/Passes.h"
 #include "privateuse/Transform/PucLocalizeCarried/Passes.h"
@@ -90,6 +92,8 @@ inline void registerPrivateUseDialects(mlir::DialectRegistry& registry)
   mlir::triton::registerScfToPumemPass();
   mlir::triton::registerToPucPasses();
   mlir::triton::registerLowerLinalgReducePasses();
+  mlir::triton::registerLinalgOutlinePasses();
+  mlir::triton::registerLinalgToRuntimePasses();
   mlir::triton::registerPidLoopPasses();
   mlir::triton::registerPucLaunchKernelPasses();
   mlir::triton::registerPucLocalizeCarriedPass();

@@ -13,6 +13,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "privateuse/Conversion/Common/I1ToI8.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
 #include "privateuse/Utils/Constants.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -213,7 +214,7 @@ public:
     addConversion([](MemRefType type, SmallVectorImpl<Type>& results) -> LogicalResult {
       FailureOr<int64_t> space = getMemRefSpace(type);
       if (failed(space)) return failure();
-      results.push_back(PtrType::get(type.getContext(), type.getElementType(), *space));
+      results.push_back(PtrType::get(type.getContext(), triton::i1ToI8(type.getElementType()), *space));
       results.append(1 + 2 * type.getRank(), IndexType::get(type.getContext()));
       return success();
     });
@@ -266,7 +267,7 @@ public:
     int64_t alignment = op.getAlignment().value_or(triton::kDefaultAlignment);
     auto voidPtrType  = PtrType::get(rewriter.getContext(), VoidType::get(rewriter.getContext()), *space);
     auto alloc        = AllocOp::create(rewriter, loc, voidPtrType, elements, constantIndex(rewriter, loc, alignment));
-    auto ptrType      = PtrType::get(rewriter.getContext(), type.getElementType(), *space);
+    auto ptrType      = PtrType::get(rewriter.getContext(), triton::i1ToI8(type.getElementType()), *space);
     Value base        = PointCastOp::create(rewriter, loc, ptrType, alloc.getResult());
 
     MemRefParts parts{base, constantIndex(rewriter, loc, staticOffset), std::move(sizes), std::move(strides)};
@@ -440,9 +441,15 @@ public:
   LogicalResult
   matchAndRewrite(RuntimeCallOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
+    bool outlined = isa_and_nonnull<func::FuncOp>(SymbolTable::lookupNearestSymbolFrom(op, op.getCalleeAttr()));
+
     SmallVector<Value> operands;
     for (auto [type, mapping] : llvm::zip_equal(op->getOperandTypes(), adaptor.getOperands())) {
       if (auto memrefType = dyn_cast<MemRefType>(type)) {
+        if (outlined) {
+          operands.append(mapping.begin(), mapping.end());
+          continue;
+        }
         operands.push_back(materializeElementPtr(rewriter, op.getLoc(), unpackMemRef(mapping, memrefType), {}));
         continue;
       }
@@ -475,6 +482,30 @@ public:
 
     SmallVector<Value> tuple = packMemRef(parts);
     rewriter.replaceOpWithMultiple(op, {tuple});
+    return success();
+  }
+};
+
+class CastOpReconcile : public OpConversionPattern<UnrealizedConversionCastOp>
+{
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    UnrealizedConversionCastOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter
+  ) const override
+  {
+    if (op.getInputs().size() != 1 || op.getOutputs().size() != 1) return failure();
+
+    SmallVector<Type> results;
+    if (failed(getTypeConverter()->convertType(op.getOutputs().front().getType(), results))) return failure();
+
+    ValueRange converted = adaptor.getOperands().front();
+    if (converted.size() != results.size()) return failure();
+    for (auto [value, type] : llvm::zip_equal(converted, results))
+      if (value.getType() != type) return failure();
+
+    rewriter.replaceOpWithMultiple(op, {converted});
     return success();
   }
 };
@@ -660,6 +691,7 @@ public:
   }
 };
 
+
 class FuncOpLowering : public OpConversionPattern<triton::FuncOp>
 {
 public:
@@ -712,60 +744,6 @@ public:
   }
 };
 
-class CallOpLowering : public OpConversionPattern<triton::CallOp>
-{
-public:
-  using OpConversionPattern::OpConversionPattern;
-
-  static bool unsetAttrs(NamedAttribute attr)
-  {
-    constexpr std::array<StringRef, 3> unsetNames{"callee", "arg_attrs", "res_attrs"};
-    StringRef name = attr.getName().getValue();
-    for (auto unsetName : unsetNames)
-      if (name == unsetName) return true;
-    return false;
-  }
-
-  LogicalResult
-  matchAndRewrite(triton::CallOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
-  {
-    SmallVector<Type> newResults;
-    SmallVector<size_t> resultCounts;
-    for (Type type : op.getResultTypes()) {
-      SmallVector<Type> converted;
-      if (failed(getTypeConverter()->convertTypes(type, converted)))
-        return rewriter.notifyMatchFailure(op, "cannot convert call result types");
-      newResults.append(converted.begin(), converted.end());
-      resultCounts.push_back(converted.size());
-    }
-
-    SmallVector<Value> operands = flattenValues(adaptor.getOperands());
-    auto newOp                  = func::CallOp::create(rewriter, op.getLoc(), op.getCalleeAttr(), newResults, operands);
-    for (NamedAttribute attr : op->getAttrs()) {
-      if (unsetAttrs(attr)) continue;
-      newOp->setAttr(attr.getName(), attr.getValue());
-    }
-
-    if (op.getArgAttrsAttr())
-      newOp.setArgAttrsAttr(
-        rewriter.getArrayAttr(expandAttrArray(op.getArgAttrsAttr(), op.getOperandTypes(), *getTypeConverter()))
-      );
-    if (op.getResAttrsAttr())
-      newOp.setResAttrsAttr(
-        rewriter.getArrayAttr(expandAttrArray(op.getResAttrsAttr(), op.getResultTypes(), *getTypeConverter()))
-      );
-
-    SmallVector<ValueRange> replacements;
-    unsigned offset = 0;
-    for (size_t count : resultCounts) {
-      replacements.push_back(newOp.getResults().slice(offset, count));
-      offset += count;
-    }
-    rewriter.replaceOpWithMultiple(op, replacements);
-    return success();
-  }
-};
-
 class ReturnOpLowering : public OpConversionPattern<triton::ReturnOp>
 {
 public:
@@ -780,14 +758,6 @@ public:
   }
 };
 
-// The launcher passes a bare pointer for every kernel argument, so the
-// descriptor of a memref entry argument only carries the statically known
-// layout of the pointer-derived memref (zero offset, natural strides). Keep
-// those components out of the exported signature. The base pointer must stay
-// even when the body ignores it, otherwise the remaining arguments would shift
-// out of the launcher's call order. Dynamic components (sizes of a pointer
-// argument) are not part of the launcher ABI either, but they cannot be
-// materialized as constants, so they are only dropped when unused.
 enum class EntryArgKind {
   Keep,
   Constant,
@@ -866,48 +836,6 @@ LogicalResult foldEntryConstants(ModuleOp module, const EntryConstants& constant
   return failure(result.wasInterrupted());
 }
 
-// The memref tuple expansion keeps descriptor components as function
-// arguments even when the body never reads them. Private outlined functions
-// are only called from this module, so drop their dead arguments together with
-// the matching call operands. Public entries keep their launcher ABI and are
-// handled by foldEntryConstants instead.
-LogicalResult eraseDeadArguments(ModuleOp module)
-{
-  struct Update
-  {
-    func::FuncOp func;
-    llvm::BitVector dead;
-  };
-  SmallVector<Update> updates;
-  module.walk([&](func::FuncOp func) {
-    if (func.isExternal() || func.isPublic()) return;
-    llvm::BitVector dead(func.getNumArguments());
-    for (auto [i, arg] : llvm::enumerate(func.getArguments()))
-      if (arg.use_empty()) dead.set(i);
-    if (dead.none()) return;
-    std::optional<SymbolTable::UseRange> uses = SymbolTable::getSymbolUses(func, module);
-    if (!uses) return;
-    for (SymbolTable::SymbolUse use : *uses)
-      if (!isa<func::CallOp>(use.getUser())) return;
-    updates.push_back({func, dead});
-  });
-
-  for (Update& update : updates) {
-    std::optional<SymbolTable::UseRange> uses = SymbolTable::getSymbolUses(update.func, module);
-    if (!uses) return update.func->emitError("lost the symbol uses of a private function");
-    for (SymbolTable::SymbolUse use : *uses) {
-      auto call = cast<func::CallOp>(use.getUser());
-      SmallVector<Value> operands;
-      for (auto [i, operand] : llvm::enumerate(call.getOperands()))
-        if (!update.dead.test(i)) operands.push_back(operand);
-      call.getOperandsMutable().assign(operands);
-    }
-    if (failed(update.func.eraseArguments(update.dead)))
-      return update.func->emitError("failed to erase dead arguments");
-  }
-  return success();
-}
-
 struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
 {
   using MemrefToPumemBase::MemrefToPumemBase;
@@ -933,6 +861,7 @@ struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
     patterns.add<TileScatterOpLowering>(converter, &getContext());
     patterns.add<RuntimeCallOpLowering>(converter, &getContext());
     patterns.add<CastOpLowering>(converter, &getContext());
+    patterns.add<CastOpReconcile>(converter, &getContext());
     patterns.add<DimOpLowering>(converter, &getContext());
     patterns.add<RankOpLowering>(converter, &getContext());
     patterns.add<ExtractStridedMetadataOpLowering>(converter, &getContext());
@@ -941,16 +870,13 @@ struct MemrefToPumemPass : public ::impl::MemrefToPumemBase<MemrefToPumemPass>
     patterns.add<IfOpLowering<scf::IfOp>, IfOpLowering<pumem::IfOp>>(converter, &getContext());
     patterns.add<YieldOpLowering<scf::YieldOp>, YieldOpLowering<pumem::YieldOp>>(converter, &getContext());
     patterns.add<FuncOpLowering>(converter, &getContext());
-    patterns.add<CallOpLowering>(converter, &getContext());
     patterns.add<ReturnOpLowering>(converter, &getContext());
     populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(patterns, converter);
     populateCallOpTypeConversionPattern(patterns, converter);
     populateReturnOpTypeConversionPattern(patterns, converter);
 
     if (failed(applyPartialConversion(module, target, std::move(patterns)))) return signalPassFailure();
-
     if (failed(foldEntryConstants(module, entryConstants))) signalPassFailure();
-    if (failed(eraseDeadArguments(module))) signalPassFailure();
   }
 };
 

@@ -132,6 +132,7 @@ class LoweringPipeline:
         module = self._parse_ir(kernel_ir)
         module = self._specialize(module, grid, constants)
         module = self._fuse_and_bufferize(module)
+        module = self._outline_computes(module)
         print(module)
         module = self._transform(module)
         module = self._lower_to_pumem(module)
@@ -199,6 +200,14 @@ class LoweringPipeline:
         privateuse.add_bufferize(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(module, 'fuse_and_bufferize')
+        return module
+
+    def _outline_computes(self, module):
+        pm = ir.pass_manager(module.context)
+        pm.enable_debug()
+        privateuse.add_linalg_to_runtime(pm)
+        privateuse.add_linalg_outline(pm, self.outlined_attr)
+        pm.run(module, 'outline_computes')
         return module
 
     def _transform(self, module):

@@ -1,5 +1,7 @@
 add_subdirectory(CollapseShape)
 add_subdirectory(LowerLinalgReduce)
+add_subdirectory(LinalgOutline)
+add_subdirectory(LinalgToRuntime)
 add_subdirectory(PidLoop)
 add_subdirectory(PucLaunchKernel)
 add_subdirectory(PucLocalizeCarried)
@@ -12,6 +14,8 @@ add_triton_library(PrivateUseTransforms
   DEPENDS
   CollapseShapeTransformPassIncGen
   LowerLinalgReduceTransformPassIncGen
+  LinalgOutlineTransformPassIncGen
+  LinalgToRuntimeTransformPassIncGen
   PidLoopTransformPassIncGen
   PucLaunchKernelTransformPassIncGen
   PucLocalizeCarriedTransformPassIncGen
@@ -23,6 +27,8 @@ add_triton_library(PrivateUseTransforms
   LINK_LIBS PUBLIC
   CollapseShape
   LowerLinalgReduce
+  LinalgOutline
+  LinalgToRuntime
   PidLoop
   PucLaunchKernel
   PucLocalizeCarried

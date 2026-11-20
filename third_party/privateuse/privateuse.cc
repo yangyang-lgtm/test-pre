@@ -10,6 +10,8 @@
 #include "privateuse/Dialect/Puc/IR/PucDialect.h"
 #include "privateuse/Transform/CollapseShape/Passes.h"
 #include "privateuse/Transform/LowerLinalgReduce/Passes.h"
+#include "privateuse/Transform/LinalgOutline/Passes.h"
+#include "privateuse/Transform/LinalgToRuntime/Passes.h"
 #include "privateuse/Transform/PidLoop/Passes.h"
 #include "privateuse/Transform/PucLaunchKernel/Passes.h"
 #include "privateuse/Transform/PucLocalizeCarried/PucLocalizeCarried.h"
@@ -63,6 +65,16 @@ using namespace mlir;
 void init_triton_privateuse(py::module_& m)
 {
   m.doc() = "Python bindings to the privateuse backend";
+
+  m.def(
+    "add_linalg_to_runtime", [](PassManager& pm) { pm.addPass(triton::createLinalgToRuntimePass()); }, py::arg("pm")
+  );
+
+  m.def(
+    "add_linalg_outline",
+    [](PassManager& pm, const std::string& outlinedAttr) { pm.addPass(triton::createLinalgOutlinePass(outlinedAttr)); },
+    py::arg("pm"), py::arg("outlined_attr") = "OUTLINED"
+  );
 
   m.def("load_dialects", [](mlir::MLIRContext& context) {
     mlir::DialectRegistry registry;
@@ -140,10 +152,6 @@ void init_triton_privateuse(py::module_& m)
   m.def("add_math_to_pumath", [](PassManager& pm) { pm.addPass(triton::createMathToPumathPass()); }, py::arg("pm"));
 
   m.def("add_scf_to_pumem", [](PassManager& pm) { pm.addPass(triton::createScfToPumemPass()); }, py::arg("pm"));
-
-
-
-
 
   m.def(
     "add_lower_linalg_reduce", [](PassManager& pm) { pm.addPass(triton::createLowerLinalgReducePass()); }, py::arg("pm")
