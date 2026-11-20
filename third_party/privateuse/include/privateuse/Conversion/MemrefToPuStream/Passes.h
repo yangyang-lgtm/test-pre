@@ -14,7 +14,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createMemrefToPuStreamPass();
 std::unique_ptr<OperationPass<ModuleOp>> createMemrefToPuStreamPass(std::string outlinedAttr);
 
 #define GEN_PASS_REGISTRATION
-#include "privateuse/Transform/MemrefToPuStream/Passes.h.inc"
+#include "privateuse/Conversion/MemrefToPuStream/Passes.h.inc"
 
 } // namespace triton
 } // namespace mlir

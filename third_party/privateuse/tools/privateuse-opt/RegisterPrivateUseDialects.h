@@ -51,7 +51,7 @@
 #include "privateuse/Dialect/PuStream/IR/PuStreamDialect.h"
 #include "privateuse/Dialect/Puc/IR/PucDialect.h"
 #include "privateuse/Transform/LowerLinalgReduce/Passes.h"
-#include "privateuse/Transform/MemrefToPuStream/Passes.h"
+#include "privateuse/Conversion/MemrefToPuStream/Passes.h"
 #include "privateuse/Transform/PidLoop/Passes.h"
 #include "privateuse/Transform/PucLaunchKernel/Passes.h"
 #include "privateuse/Transform/PucLocalizeCarried/Passes.h"

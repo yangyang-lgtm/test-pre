@@ -1,15 +1,17 @@
-add_triton_library(MemrefToPuStream
+add_triton_library(PrivateUseMemrefToPuStream
   MemrefToPuStreamPass.cpp
 
   DEPENDS
-  MemrefToPuStreamTransformPassIncGen
+  PrivateUseMemrefToPuStreamPassIncGen
 
   LINK_LIBS PUBLIC
   MLIRFuncDialect
   MLIRIR
   MLIRLinalgDialect
   MLIRPass
+  MLIRSCFDialect
   MLIRTransforms
   PUMemIR
+  PuStreamIR
   PrivateUseUtils
 )

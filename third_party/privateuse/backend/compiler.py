@@ -132,8 +132,7 @@ class LoweringPipeline:
         module = self._parse_ir(kernel_ir)
         module = self._specialize(module, grid, constants)
         module = self._fuse_and_bufferize(module)
-        module = self._outline_computes(module)
-        print(module)
+        module = self._software_pipeline(module)
         module = self._transform(module)
         module = self._lower_to_pumem(module)
         cpp = self._emit_cpp(module)
@@ -202,11 +201,12 @@ class LoweringPipeline:
         pm.run(module, 'fuse_and_bufferize')
         return module
 
-    def _outline_computes(self, module):
+    def _software_pipeline(self, module):
         pm = ir.pass_manager(module.context)
         pm.enable_debug()
         privateuse.add_memref_to_pustream(pm, self.outlined_attr)
-        pm.run(module, 'outline_computes')
+        privateuse.add_pustream_to_pumem(pm)
+        pm.run(module, 'software_pipeline')
         return module
 
     def _transform(self, module):
@@ -228,7 +228,6 @@ class LoweringPipeline:
         privateuse.add_expand_strided_metadata(pm)
         privateuse.add_memref_expand(pm)
         privateuse.add_lower_affine(pm)
-        privateuse.add_pustream_to_pumem(pm)
         privateuse.add_memref_to_pumem(pm)
         privateuse.add_sink_constant_call_args(pm)
         privateuse.add_arith_to_puarith(pm)

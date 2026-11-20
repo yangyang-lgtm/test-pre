@@ -14,7 +14,6 @@
 #include <thread>
 #include <vector>
 
-
 struct pumem_task
 {
   std::mutex mutex;
@@ -64,7 +63,7 @@ struct Lane
 int compute_lanes()
 {
   static const int lanes = [] {
-    const char* env = std::getenv("PUMEM_COMPUTE_LANES");
+    const char* env     = std::getenv("PUMEM_COMPUTE_LANES");
     const int requested = env ? std::atoi(env) : 2;
     return std::max(1, requested);
   }();
@@ -162,10 +161,10 @@ void run_lane(Lane& lane, bool is_compute)
 
 pumem_task* create_task(std::function<void()> fn)
 {
-  auto owned         = std::make_unique<pumem_task>();
-  pumem_task* task   = owned.get();
-  const int64_t tid  = get_physical_id();
-  task->fn           = [tid, fn = std::move(fn)] {
+  auto owned        = std::make_unique<pumem_task>();
+  pumem_task* task  = owned.get();
+  const int64_t tid = get_physical_id();
+  task->fn          = [tid, fn = std::move(fn)] {
     set_physical_threads_id(tid);
     fn();
   };
@@ -212,7 +211,6 @@ void wait_task(pumem_task* task)
   std::unique_lock<std::mutex> lock(task->mutex);
   task->cv.wait(lock, [&] { return task->done; });
 }
-
 
 bool is_load(pumem_copy_dir dir)
 {

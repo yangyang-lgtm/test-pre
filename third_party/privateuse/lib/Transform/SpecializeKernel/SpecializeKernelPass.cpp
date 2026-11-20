@@ -111,8 +111,7 @@ private:
     OpBuilder builder(func.getContext());
     for (triton::GetNumProgramsOp op : ops) {
       int64_t axis = static_cast<int64_t>(op.getAxis());
-      if (axis < 0 || axis >= grid.size())
-        return op.emitError("specialize: program id axis out of range");
+      if (axis < 0 || axis >= grid.size()) return op.emitError("specialize: program id axis out of range");
 
       builder.setInsertionPoint(op);
       Type type = op.getResult().getType();

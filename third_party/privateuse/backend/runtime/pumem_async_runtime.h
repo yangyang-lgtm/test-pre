@@ -103,4 +103,41 @@ void pumem_wait(const pumem_dma_handle_t& handle);
 void pumem_wait_dispatch();
 void pumem_sync();
 
+inline void pumem_wait(const pumem_dma_handle_t* handle)
+{
+  pumem_wait(*handle);
+}
+
+template <int Rank, typename... Args>
+void async_copy_dram_to_dram(
+  pumem_dma_handle_t* handle, pumem_dma_meta_t* meta, void* dst, void* src, int64_t elem_size, Args... args
+)
+{
+  async_copy_dram_to_dram<Rank>(*handle, *meta, dst, src, elem_size, args...);
+}
+
+template <int Rank, typename... Args>
+void async_copy_dram_to_sram(
+  pumem_dma_handle_t* handle, pumem_dma_meta_t* meta, void* dst, void* src, int64_t elem_size, Args... args
+)
+{
+  async_copy_dram_to_sram<Rank>(*handle, *meta, dst, src, elem_size, args...);
+}
+
+template <int Rank, typename... Args>
+void async_copy_sram_to_dram(
+  pumem_dma_handle_t* handle, pumem_dma_meta_t* meta, void* dst, void* src, int64_t elem_size, Args... args
+)
+{
+  async_copy_sram_to_dram<Rank>(*handle, *meta, dst, src, elem_size, args...);
+}
+
+template <int Rank, typename... Args>
+void async_copy_sram_to_sram(
+  pumem_dma_handle_t* handle, pumem_dma_meta_t* meta, void* dst, void* src, int64_t elem_size, Args... args
+)
+{
+  async_copy_sram_to_sram<Rank>(*handle, *meta, dst, src, elem_size, args...);
+}
+
 #endif // PUMEM_ASYNC_RUNTIME_H

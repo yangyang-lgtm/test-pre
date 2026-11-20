@@ -2,6 +2,7 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
@@ -99,6 +100,27 @@ static Value tokenOfView(Value view)
   return {};
 }
 
+static bool crossesRegion(Value value)
+{
+  if (auto argument = dyn_cast<BlockArgument>(value)) {
+    Operation* parent = argument.getOwner()->getParentOp();
+    if (!parent) return false;
+    return llvm::any_of(parent->getResultTypes(), [](Type type) { return isa<StreamTokenType>(type); });
+  }
+  Operation* producer = value.getDefiningOp();
+  if (!producer || producer->getNumRegions() == 0) return false;
+  return llvm::any_of(producer->getResultTypes(), [](Type type) { return isa<StreamTokenType>(type); });
+}
+
+static bool belongsTo(Value token, Value view)
+{
+  while (auto viewLike = view.getDefiningOp<ViewLikeOpInterface>()) view = viewLike.getViewSource();
+  if (crossesRegion(view)) return true;
+
+  Value allocation = tokenOfView(view);
+  return allocation && allocationOf(token) == allocation;
+}
+
 void PuStreamDialect::initialize()
 {
   addTypes<
@@ -144,8 +166,7 @@ LogicalResult TransferOp::verify()
     return emitOpError("ranks must match: ") << sram.getRank() << " vs " << dram.getRank();
 
   Value view = sourceSram ? getSource() : getTarget();
-  if (allocationOf(getToken()) != tokenOfView(view))
-    return emitOpError("the SRAM side is not a view of this token's allocation");
+  if (!belongsTo(getToken(), view)) return emitOpError("the SRAM side is not a view of this token's allocation");
   if (getResult().getType() != getToken().getType()) return emitOpError("the result must be the token");
   return requireClean(*this, getToken(), "the token");
 }
@@ -164,9 +185,9 @@ LogicalResult CopyOp::verify()
   if (source.getRank() != target.getRank())
     return emitOpError("ranks must match: ") << source.getRank() << " vs " << target.getRank();
 
-  if (allocationOf(getSourceToken()) != tokenOfView(getSource()))
+  if (!belongsTo(getSourceToken(), getSource()))
     return emitOpError("the source view is not a view of the source token's allocation");
-  if (allocationOf(getTargetToken()) != tokenOfView(getTarget()))
+  if (!belongsTo(getTargetToken(), getTarget()))
     return emitOpError("the target view is not a view of the target token's allocation");
   if (allocationOf(getSourceToken()) == allocationOf(getTargetToken()))
     return emitOpError("a copy needs two allocations; copying an allocation onto itself is not a statement");
@@ -186,7 +207,7 @@ LogicalResult DispatchOp::verify()
     auto view   = dyn_cast<MemRefType>(ins[index + 1].getType());
     if (!view) return emitOpError("a token input must be followed by the view it works on");
     if (!isSram(view)) return emitOpError("an input view must live in SRAM (memory space 128)");
-    if (allocationOf(token) != tokenOfView(ins[index + 1]))
+    if (!belongsTo(token, ins[index + 1]))
       return emitOpError("an input view does not belong to its token's allocation");
     if (failed(requireClean(*this, token, "an input token"))) return failure();
   }
@@ -202,7 +223,7 @@ LogicalResult DispatchOp::verify()
     auto view = dyn_cast<MemRefType>(outs[i + 1].getType());
     if (!view) return emitOpError("an output pair must end with the view it writes");
     if (!isSram(view)) return emitOpError("an output view must live in SRAM (memory space 128)");
-    if (allocationOf(outs[i]) != tokenOfView(outs[i + 1]))
+    if (!belongsTo(outs[i], outs[i + 1]))
       return emitOpError("an output view does not belong to its token's allocation");
     if (failed(requireClean(*this, outs[i], "an output token"))) return failure();
     if (getResults()[i / 2].getType() != outs[i].getType()) return emitOpError("the result must be the output token");
@@ -314,8 +335,7 @@ LogicalResult AwaitComputeOp::verify()
     if (!isToken(token.getType())) return emitOpError("every operand must be a !pustream.token");
     if (result.getType() != token.getType()) return emitOpError("the result must be the same token type");
     if (isa_and_nonnull<TransferOp, CopyOp>(token.getDefiningOp()))
-      return emitOpError("this token is written by the copy executor; await_compute does not wait it, "
-                         "use await");
+      return emitOpError("this token is written by the copy executor; await_compute does not wait it, use await");
   }
   return success();
 }

@@ -377,6 +377,22 @@ def Puc_LocalOp : Puc_Op<"local", [MemoryEffects<[MemAlloc]>]> {
   let hasCustomAssemblyFormat = 1;
 }
 
+def Puc_AddressOfOp : Puc_Op<"address_of", [Pure]> {
+  let summary = "Take the address of a slot object";
+
+  let description = [{
+    A handle and a metadata slot are C++ objects the runtime mutates; they hold
+    atomics, so they are never copied. Everything that hands one out passes its
+    address, and this op is where that address is taken -- the difference from
+    `puc.local` with an initializer, which is a copy.
+
+    Example: %p = puc.address_of %h : !pumem.dma_handle -> !pumem.dma_handle_ptr
+  }];
+  let arguments = (ins AnyType:$value);
+  let results = (outs AnyType:$pointer);
+  let assemblyFormat = "$value attr-dict `:` qualified(type($value)) `->` qualified(type($pointer))";
+}
+
 def Puc_AssignOp : Puc_Op<"assign", [MemoryEffects<[MemWrite]>]> {
   let summary = "Assign a value to a mutable local";
 

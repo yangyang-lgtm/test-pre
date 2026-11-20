@@ -399,6 +399,24 @@ def PUMem_YieldOp : PUMEM_Op<"yield",
 // ForOp (mirrors scf.for)
 //===----------------------------------------------------------------------===//
 
+def PUMem_AddressOfOp : PUMEM_Op<"address_of", [Pure]> {
+  let summary = "Take the address of a slot object";
+
+  let description = [{
+    A handle and a metadata slot are C++ objects the runtime mutates; they hold
+    atomics, so they are never copied. Anything that hands one out -- a
+    statement, a loop that carries it -- passes the address instead, and this op
+    is where that address is taken.
+
+    Example:
+      %p = pumem.address_of %h : !pumem.dma_handle -> !pumem.dma_handle_ptr
+  }];
+  let arguments = (ins AnyType:$value);
+  let results = (outs AnyType:$pointer);
+  let assemblyFormat = "$value attr-dict `:` type($value) `->` type($pointer)";
+  let hasVerifier = 1;
+}
+
 def PUMem_ForOp : PUMEM_Op<"for",
     [SingleBlock, SingleBlockImplicitTerminator<"pumem::YieldOp">,
      RecursiveMemoryEffects,
@@ -566,6 +584,34 @@ def PUMem_DmaHandle : Type<CPred<"::llvm::isa<::mlir::pumem::DmaHandleType>($_se
                             "a pumem DMA handle", "::mlir::pumem::DmaHandleType">;
 def PUMem_DmaMeta : Type<CPred<"::llvm::isa<::mlir::pumem::DmaMetaType>($_self)">,
                           "a pumem DMA metadata slot", "::mlir::pumem::DmaMetaType">;
+
+def PUMem_DmaHandlePtrType : PUMEM_Type<"DmaHandlePtr", "dma_handle_ptr"> {
+  let summary = "The address of a DMA handle";
+
+  let description = [{
+    The handle is a C++ object with atomics inside, so it is never copied; a
+    statement hands out its address instead, and a loop can carry that address
+    across iterations without moving the object.
+
+    Example: !pumem.dma_handle_ptr
+  }];
+}
+
+def PUMem_DmaMetaPtrType : PUMEM_Type<"DmaMetaPtr", "dma_meta_ptr"> {
+  let summary = "The address of a DMA metadata slot";
+
+  let description = [{
+    The metadata slot is a C++ object with atomics inside, so it is never
+    copied either; statements pass its address.
+
+    Example: !pumem.dma_meta_ptr
+  }];
+}
+
+def PUMem_DmaHandlePtr : Type<CPred<"::llvm::isa<::mlir::pumem::DmaHandlePtrType>($_self)">,
+                              "a pumem DMA handle address", "::mlir::pumem::DmaHandlePtrType">;
+def PUMem_DmaMetaPtr : Type<CPred<"::llvm::isa<::mlir::pumem::DmaMetaPtrType>($_self)">,
+                            "a pumem DMA metadata address", "::mlir::pumem::DmaMetaPtrType">;
 
 def PUMem_DmaSlotOp : PUMEM_Op<"dma_slot", [Pure]> {
   let summary = "Materialise the handle and metadata slot of one buffer";

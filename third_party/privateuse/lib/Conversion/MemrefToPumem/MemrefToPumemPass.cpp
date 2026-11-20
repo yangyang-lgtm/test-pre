@@ -39,11 +39,6 @@ bool isOwnedAllocation(Value pointer)
   return definingOp && isa<AllocOp>(definingOp);
 }
 
-unsigned getNumComponents(MemRefType type)
-{
-  return 2 + 2 * type.getRank();
-}
-
 bool hasMemRefTypes(Operation* op)
 {
   if (llvm::any_of(op->getOperandTypes(), containsMemRefType) || llvm::any_of(op->getResultTypes(), containsMemRefType))
@@ -151,10 +146,9 @@ public:
   {
     addConversion([](Type type) { return type; });
     addConversion([](MemRefType type, SmallVectorImpl<Type>& results) -> LogicalResult {
-      FailureOr<int64_t> space = getMemRefSpace(type);
-      if (failed(space)) return failure();
-      results.push_back(PtrType::get(type.getContext(), triton::i1ToI8(type.getElementType()), *space));
-      results.append(1 + 2 * type.getRank(), IndexType::get(type.getContext()));
+      FailureOr<SmallVector<Type>> types = MemRefParts::typesFor(type, type.getContext());
+      if (failed(types)) return failure();
+      results.append(types->begin(), types->end());
       return success();
     });
   }
@@ -210,7 +204,7 @@ public:
     Value base        = PointCastOp::create(rewriter, loc, ptrType, alloc.getResult());
 
     MemRefParts parts{base, constantIndex(rewriter, loc, staticOffset), std::move(sizes), std::move(strides)};
-    SmallVector<Value> tuple = packMemRef(parts);
+    SmallVector<Value> tuple = parts.pack();
     rewriter.replaceOpWithMultiple(op, {tuple});
     return success();
   }
@@ -227,8 +221,11 @@ public:
     auto type = dyn_cast<MemRefType>(op.getBuffer().getType());
     if (!type) return op.emitError("expected a memref buffer");
 
-    Value ptr = materializeElementPtr(rewriter, op.getLoc(), unpackMemRef(adaptor.getBuffer(), type), {});
-    auto slot = DmaSlotOp::create(rewriter, op.getLoc(), op.getHandle().getType(), op.getMeta().getType(), ptr);
+    FailureOr<MemRefParts> parts = MemRefParts::unpack(adaptor.getBuffer(), type, op);
+    if (failed(parts)) return failure();
+    FailureOr<Value> ptr = parts->elementPtr(rewriter, op.getLoc());
+    if (failed(ptr)) return failure();
+    auto slot = DmaSlotOp::create(rewriter, op.getLoc(), op.getHandle().getType(), op.getMeta().getType(), *ptr);
     rewriter.replaceOp(op, slot.getResults());
     return success();
   }
@@ -242,8 +239,11 @@ public:
   LogicalResult
   matchAndRewrite(memref::DeallocOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
-    auto type         = cast<MemRefType>(op.getMemref().getType());
-    MemRefParts parts = unpackMemRef(adaptor.getMemref(), type);
+    auto type                      = cast<MemRefType>(op.getMemref().getType());
+    FailureOr<MemRefParts> partsOr = MemRefParts::unpack(adaptor.getMemref(), type, op);
+    if (failed(partsOr)) return failure();
+    MemRefParts parts = *partsOr;
+    ;
     if (!isOwnedAllocation(parts.base))
       return op.emitError("cannot free a memref that does not come straight out of a pumem.alloc");
     std::optional<int64_t> offset = getConstantIntValue(parts.offset);
@@ -264,12 +264,16 @@ public:
   LogicalResult
   matchAndRewrite(memref::LoadOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
-    auto type         = cast<MemRefType>(op.getMemref().getType());
-    MemRefParts parts = unpackMemRef(adaptor.getMemref(), type);
+    auto type                      = cast<MemRefType>(op.getMemref().getType());
+    FailureOr<MemRefParts> partsOr = MemRefParts::unpack(adaptor.getMemref(), type, op);
+    if (failed(partsOr)) return failure();
+    MemRefParts parts = *partsOr;
+    ;
     SmallVector<Value> indices;
     for (ValueRange index : adaptor.getIndices()) indices.push_back(index.front());
-    Value address = materializeElementPtr(rewriter, op.getLoc(), parts, indices);
-    rewriter.replaceOpWithNewOp<LoadOp>(op, op.getType(), address);
+    FailureOr<Value> address = parts.elementPtr(rewriter, op.getLoc(), indices);
+    if (failed(address)) return failure();
+    rewriter.replaceOpWithNewOp<LoadOp>(op, op.getType(), *address);
     return success();
   }
 };
@@ -282,12 +286,16 @@ public:
   LogicalResult
   matchAndRewrite(memref::StoreOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
-    auto type         = cast<MemRefType>(op.getMemref().getType());
-    MemRefParts parts = unpackMemRef(adaptor.getMemref(), type);
+    auto type                      = cast<MemRefType>(op.getMemref().getType());
+    FailureOr<MemRefParts> partsOr = MemRefParts::unpack(adaptor.getMemref(), type, op);
+    if (failed(partsOr)) return failure();
+    MemRefParts parts = *partsOr;
+    ;
     SmallVector<Value> indices;
     for (ValueRange index : adaptor.getIndices()) indices.push_back(index.front());
-    Value address = materializeElementPtr(rewriter, op.getLoc(), parts, indices);
-    StoreOp::create(rewriter, op.getLoc(), adaptor.getValue().front(), address);
+    FailureOr<Value> address = parts.elementPtr(rewriter, op.getLoc(), indices);
+    if (failed(address)) return failure();
+    StoreOp::create(rewriter, op.getLoc(), adaptor.getValue().front(), *address);
     rewriter.eraseOp(op);
     return success();
   }
@@ -301,19 +309,26 @@ public:
   LogicalResult
   matchAndRewrite(memref::CopyOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
-    Location loc       = op.getLoc();
-    auto sourceType    = cast<MemRefType>(op.getSource().getType());
-    auto targetType    = cast<MemRefType>(op.getTarget().getType());
-    MemRefParts source = unpackMemRef(adaptor.getSource(), sourceType);
-    MemRefParts target = unpackMemRef(adaptor.getTarget(), targetType);
+    Location loc                    = op.getLoc();
+    auto sourceType                 = cast<MemRefType>(op.getSource().getType());
+    auto targetType                 = cast<MemRefType>(op.getTarget().getType());
+    FailureOr<MemRefParts> sourceOr = MemRefParts::unpack(adaptor.getSource(), sourceType, op);
+    if (failed(sourceOr)) return failure();
+    MemRefParts source = *sourceOr;
+    ;
+    FailureOr<MemRefParts> targetOr = MemRefParts::unpack(adaptor.getTarget(), targetType, op);
+    if (failed(targetOr)) return failure();
+    MemRefParts target = *targetOr;
+    ;
 
     FailureOr<int64_t> elementBytes = getElementByteSize(sourceType.getElementType(), op);
     if (failed(elementBytes)) return op.emitError("cannot determine the byte size of the element type");
 
-    Value targetPtr = materializeElementPtr(rewriter, loc, target, {});
-    Value sourcePtr = materializeElementPtr(rewriter, loc, source, {});
+    FailureOr<Value> targetPtr = target.elementPtr(rewriter, loc);
+    FailureOr<Value> sourcePtr = source.elementPtr(rewriter, loc);
+    if (failed(targetPtr) || failed(sourcePtr)) return failure();
     CopyOp::create(
-      rewriter, loc, targetPtr, sourcePtr, source.sizes, target.strides, source.strides,
+      rewriter, loc, *targetPtr, *sourcePtr, source.sizes, target.strides, source.strides,
       constantIndex(rewriter, loc, *elementBytes)
     );
     rewriter.eraseOp(op);
@@ -329,27 +344,45 @@ public:
   LogicalResult
   matchAndRewrite(TileGatherOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
-    Location loc            = op.getLoc();
-    auto sourceType         = cast<MemRefType>(op.getSource().getType());
-    auto indicesType        = cast<MemRefType>(op.getIndices().getType());
-    auto destinationType    = cast<MemRefType>(op.getDestination().getType());
-    MemRefParts source      = unpackMemRef(adaptor.getSource(), sourceType);
-    MemRefParts indices     = unpackMemRef(adaptor.getIndices(), indicesType);
-    MemRefParts destination = unpackMemRef(adaptor.getDestination(), destinationType);
+    Location loc                    = op.getLoc();
+    auto sourceType                 = cast<MemRefType>(op.getSource().getType());
+    auto indicesType                = cast<MemRefType>(op.getIndices().getType());
+    auto destinationType            = cast<MemRefType>(op.getDestination().getType());
+    FailureOr<MemRefParts> sourceOr = MemRefParts::unpack(adaptor.getSource(), sourceType, op);
+    if (failed(sourceOr)) return failure();
+    MemRefParts source = *sourceOr;
+    ;
+    FailureOr<MemRefParts> indicesOr = MemRefParts::unpack(adaptor.getIndices(), indicesType, op);
+    if (failed(indicesOr)) return failure();
+    MemRefParts indices = *indicesOr;
+    ;
+    FailureOr<MemRefParts> destinationOr = MemRefParts::unpack(adaptor.getDestination(), destinationType, op);
+    if (failed(destinationOr)) return failure();
+    MemRefParts destination = *destinationOr;
 
-    Value mask;
+    FailureOr<Value> maskPtr;
     SmallVector<Value> maskStrides;
     if (op.getMask()) {
-      MemRefParts maskParts = unpackMemRef(adaptor.getMask(), cast<MemRefType>(op.getMask().getType()));
-      mask                  = materializeElementPtr(rewriter, loc, maskParts, {});
-      maskStrides           = std::move(maskParts.strides);
+      FailureOr<MemRefParts> maskPartsOr =
+        MemRefParts::unpack(adaptor.getMask(), cast<MemRefType>(op.getMask().getType()), op);
+      if (failed(maskPartsOr)) return failure();
+      MemRefParts maskParts = *maskPartsOr;
+      ;
+      maskPtr     = maskParts.elementPtr(rewriter, loc);
+      maskStrides = std::move(maskParts.strides);
+      if (failed(maskPtr)) return failure();
     }
+    Value mask  = succeeded(maskPtr) ? *maskPtr : Value();
     Value other = op.getOther() ? adaptor.getOther().front() : Value();
 
+    FailureOr<Value> sourcePtr      = source.elementPtr(rewriter, loc);
+    FailureOr<Value> indicesPtr     = indices.elementPtr(rewriter, loc);
+    FailureOr<Value> destinationPtr = destination.elementPtr(rewriter, loc);
+    if (failed(sourcePtr) || failed(indicesPtr) || failed(destinationPtr)) return failure();
+
     GatherOp::create(
-      rewriter, loc, materializeElementPtr(rewriter, loc, source, {}), source.strides.front(),
-      materializeElementPtr(rewriter, loc, indices, {}), materializeElementPtr(rewriter, loc, destination, {}),
-      destination.sizes, indices.strides, destination.strides, mask, maskStrides, other
+      rewriter, loc, *sourcePtr, source.strides.front(), *indicesPtr, *destinationPtr, destination.sizes,
+      indices.strides, destination.strides, mask, maskStrides, other
     );
     rewriter.eraseOp(op);
     return success();
@@ -364,26 +397,44 @@ public:
   LogicalResult
   matchAndRewrite(TileScatterOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
-    Location loc            = op.getLoc();
-    auto sourceType         = cast<MemRefType>(op.getSource().getType());
-    auto indicesType        = cast<MemRefType>(op.getIndices().getType());
-    auto destinationType    = cast<MemRefType>(op.getDestination().getType());
-    MemRefParts source      = unpackMemRef(adaptor.getSource(), sourceType);
-    MemRefParts indices     = unpackMemRef(adaptor.getIndices(), indicesType);
-    MemRefParts destination = unpackMemRef(adaptor.getDestination(), destinationType);
+    Location loc                    = op.getLoc();
+    auto sourceType                 = cast<MemRefType>(op.getSource().getType());
+    auto indicesType                = cast<MemRefType>(op.getIndices().getType());
+    auto destinationType            = cast<MemRefType>(op.getDestination().getType());
+    FailureOr<MemRefParts> sourceOr = MemRefParts::unpack(adaptor.getSource(), sourceType, op);
+    if (failed(sourceOr)) return failure();
+    MemRefParts source = *sourceOr;
+    ;
+    FailureOr<MemRefParts> indicesOr = MemRefParts::unpack(adaptor.getIndices(), indicesType, op);
+    if (failed(indicesOr)) return failure();
+    MemRefParts indices = *indicesOr;
+    ;
+    FailureOr<MemRefParts> destinationOr = MemRefParts::unpack(adaptor.getDestination(), destinationType, op);
+    if (failed(destinationOr)) return failure();
+    MemRefParts destination = *destinationOr;
 
-    Value mask;
+    FailureOr<Value> maskPtr;
     SmallVector<Value> maskStrides;
     if (op.getMask()) {
-      MemRefParts maskParts = unpackMemRef(adaptor.getMask(), cast<MemRefType>(op.getMask().getType()));
-      mask                  = materializeElementPtr(rewriter, loc, maskParts, {});
-      maskStrides           = std::move(maskParts.strides);
+      FailureOr<MemRefParts> maskPartsOr =
+        MemRefParts::unpack(adaptor.getMask(), cast<MemRefType>(op.getMask().getType()), op);
+      if (failed(maskPartsOr)) return failure();
+      MemRefParts maskParts = *maskPartsOr;
+      ;
+      maskPtr     = maskParts.elementPtr(rewriter, loc);
+      maskStrides = std::move(maskParts.strides);
+      if (failed(maskPtr)) return failure();
     }
+    Value mask = succeeded(maskPtr) ? *maskPtr : Value();
+
+    FailureOr<Value> sourcePtr      = source.elementPtr(rewriter, loc);
+    FailureOr<Value> indicesPtr     = indices.elementPtr(rewriter, loc);
+    FailureOr<Value> destinationPtr = destination.elementPtr(rewriter, loc);
+    if (failed(sourcePtr) || failed(indicesPtr) || failed(destinationPtr)) return failure();
 
     ScatterOp::create(
-      rewriter, loc, materializeElementPtr(rewriter, loc, source, {}),
-      materializeElementPtr(rewriter, loc, indices, {}), materializeElementPtr(rewriter, loc, destination, {}),
-      destination.strides.front(), source.sizes, source.strides, indices.strides, mask, maskStrides
+      rewriter, loc, *sourcePtr, *indicesPtr, *destinationPtr, destination.strides.front(), source.sizes,
+      source.strides, indices.strides, mask, maskStrides
     );
     rewriter.eraseOp(op);
     return success();
@@ -407,7 +458,11 @@ public:
           operands.append(mapping.begin(), mapping.end());
           continue;
         }
-        operands.push_back(materializeElementPtr(rewriter, op.getLoc(), unpackMemRef(mapping, memrefType), {}));
+        FailureOr<MemRefParts> parts = MemRefParts::unpack(mapping, memrefType, op);
+        if (failed(parts)) return failure();
+        FailureOr<Value> ptr = parts->elementPtr(rewriter, op.getLoc());
+        if (failed(ptr)) return failure();
+        operands.push_back(*ptr);
         continue;
       }
       operands.append(mapping.begin(), mapping.end());
@@ -428,8 +483,11 @@ public:
   LogicalResult
   matchAndRewrite(memref::CastOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
-    auto sourceType   = cast<MemRefType>(op.getSource().getType());
-    MemRefParts parts = unpackMemRef(adaptor.getSource(), sourceType);
+    auto sourceType                = cast<MemRefType>(op.getSource().getType());
+    FailureOr<MemRefParts> partsOr = MemRefParts::unpack(adaptor.getSource(), sourceType, op);
+    if (failed(partsOr)) return failure();
+    MemRefParts parts = *partsOr;
+    ;
 
     FailureOr<int64_t> sourceSpace = getMemRefSpace(sourceType);
     auto targetType                = cast<MemRefType>(op.getType());
@@ -437,7 +495,7 @@ public:
     if (failed(sourceSpace) || failed(targetSpace) || *sourceSpace != *targetSpace)
       return op.emitError("cannot lower a memref.cast that changes the memory space");
 
-    SmallVector<Value> tuple = packMemRef(parts);
+    SmallVector<Value> tuple = parts.pack();
     rewriter.replaceOpWithMultiple(op, {tuple});
     return success();
   }
@@ -480,9 +538,12 @@ public:
       return op.emitError("cannot lower memref.dim with a dynamic dimension index");
     }
 
-    auto type         = cast<MemRefType>(op.getSource().getType());
-    MemRefParts parts = unpackMemRef(adaptor.getSource(), type);
-    int64_t index     = *constant;
+    auto type                      = cast<MemRefType>(op.getSource().getType());
+    FailureOr<MemRefParts> partsOr = MemRefParts::unpack(adaptor.getSource(), type, op);
+    if (failed(partsOr)) return failure();
+    MemRefParts parts = *partsOr;
+    ;
+    int64_t index = *constant;
     if (index >= type.getRank()) return op.emitError("dimension index is out of range");
     rewriter.replaceOp(op, parts.sizes[index]);
     return success();
@@ -512,9 +573,12 @@ public:
     memref::ExtractStridedMetadataOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter
   ) const override
   {
-    Location loc      = op.getLoc();
-    auto type         = cast<MemRefType>(op.getSource().getType());
-    MemRefParts parts = unpackMemRef(adaptor.getSource(), type);
+    Location loc                   = op.getLoc();
+    auto type                      = cast<MemRefType>(op.getSource().getType());
+    FailureOr<MemRefParts> partsOr = MemRefParts::unpack(adaptor.getSource(), type, op);
+    if (failed(partsOr)) return failure();
+    MemRefParts parts = *partsOr;
+    ;
 
     SmallVector<Value> flat{parts.base, constantIndex(rewriter, loc, 0)};
     flat.push_back(parts.offset);
@@ -538,10 +602,13 @@ public:
     memref::ReinterpretCastOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter
   ) const override
   {
-    Location loc       = op.getLoc();
-    auto sourceType    = cast<MemRefType>(op.getSource().getType());
-    auto targetType    = cast<MemRefType>(op.getType());
-    MemRefParts source = unpackMemRef(adaptor.getSource(), sourceType);
+    Location loc                    = op.getLoc();
+    auto sourceType                 = cast<MemRefType>(op.getSource().getType());
+    auto targetType                 = cast<MemRefType>(op.getType());
+    FailureOr<MemRefParts> sourceOr = MemRefParts::unpack(adaptor.getSource(), sourceType, op);
+    if (failed(sourceOr)) return failure();
+    MemRefParts source = *sourceOr;
+    ;
 
     FailureOr<int64_t> sourceSpace = getMemRefSpace(sourceType);
     FailureOr<int64_t> targetSpace = getMemRefSpace(targetType);

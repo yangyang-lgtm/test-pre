@@ -1,10 +1,11 @@
-#include "privateuse/Transform/MemrefToPuStream/Passes.h"
+#include "privateuse/Conversion/MemrefToPuStream/Passes.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
@@ -21,10 +22,10 @@
 #include <string>
 
 #define GEN_PASS_DECL_MEMREFTOPUSTREAM
-#include "privateuse/Transform/MemrefToPuStream/Passes.h.inc"
+#include "privateuse/Conversion/MemrefToPuStream/Passes.h.inc"
 
 #define GEN_PASS_DEF_MEMREFTOPUSTREAM
-#include "privateuse/Transform/MemrefToPuStream/Passes.h.inc"
+#include "privateuse/Conversion/MemrefToPuStream/Passes.h.inc"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -85,7 +86,7 @@ pustream::AllocOp allocationOfToken(Value token)
   }
 }
 
-FailureOr<Value> tokenBefore(pustream::AllocOp allocation, Operation* use)
+FailureOr<Value> tokenBefore(pustream::AllocOp allocation, Operation* use, bool diagnose = true)
 {
   Operation* from = use;
   for (Block* block = use->getBlock(); block;) {
@@ -93,7 +94,7 @@ FailureOr<Value> tokenBefore(pustream::AllocOp allocation, Operation* use)
       for (Value result : op->getResults()) {
         if (!isToken(result.getType()) || allocationOfToken(result) != allocation) continue;
         if (isa<pustream::TransferOp, pustream::CopyOp, pustream::DispatchOp>(op)) {
-          op->emitError("this allocation is still in flight; await it before using it again");
+          if (diagnose) op->emitError("this allocation is still in flight; await it before using it again");
           return failure();
         }
         return result;
@@ -107,11 +108,161 @@ FailureOr<Value> tokenBefore(pustream::AllocOp allocation, Operation* use)
   return failure();
 }
 
+unsigned threadedMemrefs(Operation* op)
+{
+  auto attr = op->getAttrOfType<IntegerAttr>(kThreadedAttr);
+  return attr ? attr.getInt() : 0;
+}
+
+FailureOr<Value> tokenFor(Value view, Operation* use, bool diagnose = true)
+{
+  Value base = view;
+  while (auto viewLike = base.getDefiningOp<ViewLikeOpInterface>()) base = viewLike.getViewSource();
+
+  if (auto argument = dyn_cast<BlockArgument>(base)) {
+    auto loop        = dyn_cast<scf::ForOp>(argument.getOwner()->getParentOp());
+    unsigned memrefs = loop ? threadedMemrefs(loop) : 0;
+    if (!memrefs) return failure();
+    unsigned index = argument.getArgNumber() - loop.getNumInductionVars();
+    if (index >= memrefs) return failure();
+    return loop.getBody()->getArgument(1 + memrefs + index);
+  }
+  if (auto loop = base.getDefiningOp<scf::ForOp>()) {
+    unsigned memrefs = threadedMemrefs(loop);
+    if (!memrefs) return failure();
+    unsigned index = cast<OpResult>(base).getResultNumber();
+    if (index >= memrefs) return failure();
+    return loop.getResult(memrefs + index);
+  }
+  if (auto ifOp = base.getDefiningOp<scf::IfOp>()) {
+    unsigned memrefs = threadedMemrefs(ifOp);
+    if (!memrefs) return failure();
+    unsigned index = cast<OpResult>(base).getResultNumber();
+    if (index >= memrefs) return failure();
+    return ifOp.getResult(memrefs + index);
+  }
+  auto alloc = allocationOfView(base);
+  if (!alloc) return failure();
+  return tokenBefore(alloc, use, diagnose);
+}
+
+void threadLoop(scf::ForOp loop)
+{
+  if (loop.getNumRegionIterArgs() == 0) return;
+  if (!llvm::all_of(loop.getInitArgs(), [](Value value) { return isa<MemRefType>(value.getType()); })) return;
+
+  Location loc = loop.getLoc();
+  auto yield   = cast<scf::YieldOp>(loop.getBody()->getTerminator());
+
+  SmallVector<Value> inits(loop.getInitArgs());
+  for (Value init : loop.getInitArgs()) {
+    auto token = tokenFor(init, loop);
+    if (failed(token)) return;
+    inits.push_back(*token);
+  }
+  SmallVector<Value> yielded(yield.getResults());
+  for (Value value : yield.getResults()) {
+    auto token = tokenFor(value, yield);
+    if (failed(token)) return;
+    yielded.push_back(*token);
+  }
+
+  OpBuilder builder(loop);
+  auto newLoop = scf::ForOp::create(builder, loc, loop.getLowerBound(), loop.getUpperBound(), loop.getStep(), inits);
+  newLoop->setAttr(kThreadedAttr, builder.getI64IntegerAttr(loop.getNumRegionIterArgs()));
+
+  Block* oldBody = loop.getBody();
+  Block* newBody = newLoop.getBody();
+  for (unsigned i = 0; i < oldBody->getNumArguments(); ++i)
+    oldBody->getArgument(i).replaceAllUsesWith(newBody->getArgument(i));
+
+  auto& oldOps = oldBody->getOperations();
+  newBody->getOperations().splice(newBody->end(), oldOps, oldOps.begin(), std::prev(oldOps.end()));
+  OpBuilder yieldBuilder = OpBuilder::atBlockEnd(newBody);
+  scf::YieldOp::create(yieldBuilder, loc, yielded);
+
+  for (unsigned i = 0; i < loop.getNumResults(); ++i) loop.getResult(i).replaceAllUsesWith(newLoop.getResult(i));
+  loop.erase();
+}
+
+void threadIf(scf::IfOp ifOp)
+{
+  if (ifOp.getNumResults() == 0 || ifOp.getElseRegion().empty()) return;
+  if (!llvm::all_of(ifOp.getResultTypes(), [](Type type) { return isa<MemRefType>(type); })) return;
+
+  auto tokensOf = [](scf::YieldOp yield) -> std::optional<SmallVector<Value>> {
+    SmallVector<Value> values(yield.getResults());
+    for (Value value : yield.getResults()) {
+      auto token = tokenFor(value, yield);
+      if (failed(token)) return std::nullopt;
+      values.push_back(*token);
+    }
+    return values;
+  };
+  auto thenValues = tokensOf(ifOp.thenYield());
+  auto elseValues = tokensOf(ifOp.elseYield());
+  if (!thenValues || !elseValues) return;
+
+  SmallVector<Type> types(ifOp.getResultTypes());
+  types.append(ifOp.getNumResults(), pustream::StreamTokenType::get(ifOp.getContext()));
+
+  OpBuilder builder(ifOp);
+  auto newIf = scf::IfOp::create(builder, ifOp.getLoc(), types, ifOp.getCondition(), /*withElseRegion=*/false);
+  newIf->setAttr(kThreadedAttr, builder.getI64IntegerAttr(ifOp.getNumResults()));
+  newIf.getThenRegion().getBlocks().clear();
+  newIf.getThenRegion().takeBody(ifOp.getThenRegion());
+  newIf.getElseRegion().takeBody(ifOp.getElseRegion());
+
+  auto rewriteYield = [](scf::YieldOp yield, ArrayRef<Value> values) { yield.getResultsMutable().assign(values); };
+  rewriteYield(cast<scf::YieldOp>(newIf.getThenRegion().front().getTerminator()), *thenValues);
+  rewriteYield(cast<scf::YieldOp>(newIf.getElseRegion().front().getTerminator()), *elseValues);
+
+  for (unsigned i = 0; i < ifOp.getNumResults(); ++i) ifOp.getResult(i).replaceAllUsesWith(newIf.getResult(i));
+  ifOp.erase();
+}
+
+void threadRegionTokens(ModuleOp module)
+{
+  SmallVector<Operation*> regions;
+  module.walk<WalkOrder::PostOrder>([&](Operation* op) {
+    if (isa<scf::ForOp, scf::IfOp>(op)) regions.push_back(op);
+  });
+  for (Operation* op : regions) {
+    if (auto loop = dyn_cast<scf::ForOp>(op)) threadLoop(loop);
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) threadIf(ifOp);
+  }
+}
+
+void refreshRegionTokens(ModuleOp module)
+{
+  module.walk([&](Operation* op) {
+    unsigned memrefs = threadedMemrefs(op);
+    if (!memrefs) return;
+
+    if (auto loop = dyn_cast<scf::ForOp>(op)) {
+      auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
+      for (unsigned i = 0; i < memrefs; ++i) {
+        if (auto token = tokenFor(loop.getInitArgs()[i], loop); succeeded(token))
+          loop.getInitArgsMutable()[memrefs + i].set(*token);
+        if (auto token = tokenFor(yield.getOperand(i), yield); succeeded(token))
+          yield.getResultsMutable()[memrefs + i].set(*token);
+      }
+    }
+
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      for (scf::YieldOp yield : {ifOp.thenYield(), ifOp.elseYield()})
+        for (unsigned i = 0; i < memrefs; ++i)
+          if (auto token = tokenFor(yield.getOperand(i), yield); succeeded(token))
+            yield.getResultsMutable()[memrefs + i].set(*token);
+    }
+
+    op->removeAttr(kThreadedAttr);
+  });
+}
+
 LogicalResult appendPair(Operation* at, Value view, SmallVectorImpl<Value>& pairs)
 {
-  auto alloc = allocationOfView(view);
-  if (!alloc) return failure();
-  auto token = tokenBefore(alloc, at);
+  auto token = tokenFor(view, at);
   if (failed(token)) return failure();
   pairs.push_back(*token);
   pairs.push_back(view);
@@ -124,11 +275,11 @@ bool classify(linalg::LinalgOp op, SmallVectorImpl<Value>& ins, SmallVectorImpl<
     Value value = operand.get();
     Type type   = value.getType();
     if (op.isDpsInit(&operand)) {
-      if (!isa<MemRefType>(type) || !allocationOfView(value)) return false;
+      if (!isa<MemRefType>(type) || failed(tokenFor(value, op, /*diagnose=*/false))) return false;
       if (!llvm::is_contained(outs, value)) outs.push_back(value);
       continue;
     }
-    if (isa<MemRefType>(type) && !allocationOfView(value)) return false;
+    if (isa<MemRefType>(type) && failed(tokenFor(value, op, /*diagnose=*/false))) return false;
     if (!isa<MemRefType>(type) && !type.isIntOrIndexOrFloat()) return false;
     if (!llvm::is_contained(ins, value)) ins.push_back(value);
   }
@@ -238,15 +389,12 @@ public:
     Location loc = copy.getLoc();
 
     if (sourceSram && targetSram) {
-      auto sourceAlloc = allocationOfView(copy.getSource());
-      auto targetAlloc = allocationOfView(copy.getTarget());
-      if (!sourceAlloc || !targetAlloc)
+      auto sourceToken = tokenFor(copy.getSource(), copy);
+      auto targetToken = tokenFor(copy.getTarget(), copy);
+      if (failed(sourceToken) || failed(targetToken))
         return copy.emitError("cannot express this copy: an SRAM side does not trace back to an allocation");
-      if (sourceAlloc == targetAlloc) return copy.emitError("copying an allocation onto itself is not a statement");
-
-      auto sourceToken = tokenBefore(sourceAlloc, copy);
-      auto targetToken = tokenBefore(targetAlloc, copy);
-      if (failed(sourceToken) || failed(targetToken)) return failure();
+      if (allocationOfToken(*sourceToken) == allocationOfToken(*targetToken))
+        return copy.emitError("copying an allocation onto itself is not a statement");
 
       auto copied = pustream::CopyOp::create(
         rewriter, loc, targetToken->getType(), *sourceToken, copy.getSource(), *targetToken, copy.getTarget()
@@ -257,10 +405,9 @@ public:
     }
 
     Value sram = sourceSram ? copy.getSource() : copy.getTarget();
-    auto alloc = allocationOfView(sram);
-    if (!alloc) return copy.emitError("cannot express this copy: the SRAM side does not trace back to an allocation");
-    auto token = tokenBefore(alloc, copy);
-    if (failed(token)) return failure();
+    auto token = tokenFor(sram, copy);
+    if (failed(token))
+      return copy.emitError("cannot express this copy: the SRAM side does not trace back to an allocation");
 
     Value from       = sourceSram ? sram : copy.getSource();
     Value to         = sourceSram ? copy.getTarget() : sram;
@@ -396,7 +543,7 @@ struct MemrefToPuStreamPass : public ::impl::MemrefToPuStreamBase<MemrefToPuStre
 
   void getDependentDialects(DialectRegistry& registry) const override
   {
-    registry.insert<arith::ArithDialect, func::FuncDialect, pustream::PuStreamDialect>();
+    registry.insert<arith::ArithDialect, func::FuncDialect, scf::SCFDialect, pustream::PuStreamDialect>();
   }
 
   void runOnOperation() override
@@ -410,6 +557,8 @@ struct MemrefToPuStreamPass : public ::impl::MemrefToPuStreamBase<MemrefToPuStre
       }
     }
 
+    threadRegionTokens(getOperation());
+
     ConversionTarget target(getContext());
     target.addIllegalOp<memref::AllocOp, memref::CopyOp>();
     target.markUnknownOpDynamicallyLegal([&](Operation* op) {
@@ -422,7 +571,12 @@ struct MemrefToPuStreamPass : public ::impl::MemrefToPuStreamBase<MemrefToPuStre
     patterns.add<RuntimeLowering>(&getContext());
     patterns.add<LinalgOpLowering>(&getContext(), outlinedAttr);
 
-    if (failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) signalPassFailure();
+    if (failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {
+      signalPassFailure();
+      return;
+    }
+
+    refreshRegionTokens(getOperation());
   }
 };
 

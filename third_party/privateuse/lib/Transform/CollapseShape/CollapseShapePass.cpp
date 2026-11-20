@@ -400,8 +400,9 @@ struct CollapseElementwise : public OpRewritePattern<linalg::GenericOp>
 
     SmallVector<Type> resultTypes;
     for (Value init : inits) resultTypes.push_back(init.getType());
-    SmallVector<AffineMap> indexingMaps(op.getNumDpsInputs() + op.getNumDpsInits(),
-                                        AffineMap::getMultiDimIdentityMap(1, rewriter.getContext()));
+    SmallVector<AffineMap> indexingMaps(
+      op.getNumDpsInputs() + op.getNumDpsInits(), AffineMap::getMultiDimIdentityMap(1, rewriter.getContext())
+    );
     SmallVector<utils::IteratorType> iteratorTypes(1, utils::IteratorType::parallel);
 
     Block* sourceBody = op.getBlock();

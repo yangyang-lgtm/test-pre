@@ -16,10 +16,13 @@ inline constexpr int64_t kDefaultAlignment = 64;
 
 inline constexpr int kNumAxes = static_cast<int>(getMaxEnumValForProgramIDDim()) + 1;
 
-inline constexpr llvm::StringLiteral kGridAttr      = "privateuse.grid";
-inline constexpr llvm::StringLiteral kOutlinedAttr  = "pumem.outlined";
-inline constexpr llvm::StringLiteral kStagesAttr    = "pustream.stages";
-inline constexpr llvm::StringLiteral kPipelinedAttr = "pustream.pipelined";
+inline constexpr llvm::StringLiteral kGridAttr          = "privateuse.grid";
+inline constexpr llvm::StringLiteral kOutlinedAttr      = "pumem.outlined";
+inline constexpr llvm::StringLiteral kStagesAttr        = "pustream.stages";
+inline constexpr llvm::StringLiteral kPipelinedAttr     = "pustream.pipelined";
+inline constexpr llvm::StringLiteral kThreadedAttr      = "pustream.threaded";
+inline constexpr llvm::StringLiteral kPipelineAttr      = "pumem.pipeline";
+inline constexpr llvm::StringLiteral kPipelinedLoopAttr = "pumem.pipelined";
 }
 }
 

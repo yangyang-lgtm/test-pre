@@ -48,9 +48,7 @@ private:
     MLIRContext* ctx = attr.getContext();
     return TypeSwitch<Attribute, Attribute>(attr)
       .Case([&](arith::FastMathFlagsAttr a) {
-        return puarith::FastMathFlagsAttr::get(
-          ctx, static_cast<puarith::FastMathFlags>(a.getValue())
-        );
+        return puarith::FastMathFlagsAttr::get(ctx, static_cast<puarith::FastMathFlags>(a.getValue()));
       })
       .Default([](Attribute a) { return a; });
   }

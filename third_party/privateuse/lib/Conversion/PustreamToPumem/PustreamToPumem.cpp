@@ -3,6 +3,8 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/SCF/Transforms/Patterns.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "privateuse/Conversion/Common/MemRefParts.h"
@@ -18,21 +20,6 @@ using namespace mlir::pumem;
 using namespace mlir::pustream;
 
 namespace {
-
-  struct Descriptor
-{
-  SmallVector<Value> sizes;
-  SmallVector<Value> strides;
-};
-
-Descriptor descriptorOf(OpBuilder& builder, Location loc, Value view)
-{
-  auto metadata = memref::ExtractStridedMetadataOp::create(builder, loc, view);
-  Descriptor descriptor;
-  descriptor.sizes.assign(metadata.getSizes().begin(), metadata.getSizes().end());
-  descriptor.strides.assign(metadata.getStrides().begin(), metadata.getStrides().end());
-  return descriptor;
-}
 
 bool isSram(MemRefType type)
 {
@@ -60,9 +47,12 @@ public:
     auto slot   = pumem::DmaSlotOp::create(
       rewriter, loc, DmaHandleType::get(getContext()), DmaMetaType::get(getContext()), memref.getMemref()
     );
+    auto handle = pumem::AddressOfOp::create(rewriter, loc, DmaHandlePtrType::get(getContext()), slot.getHandle());
+    auto meta   = pumem::AddressOfOp::create(rewriter, loc, DmaMetaPtrType::get(getContext()), slot.getMeta());
 
-    SmallVector<Value> token{slot.getHandle(), slot.getMeta()};
-    rewriter.replaceOpWithMultiple(op, {ValueRange(token), ValueRange{memref.getMemref()}});
+    rewriter.replaceOpWithMultiple(
+      op, {ValueRange{handle.getPointer(), meta.getPointer()}, ValueRange{memref.getMemref()}}
+    );
     return success();
   }
 };
@@ -75,9 +65,9 @@ public:
   LogicalResult
   matchAndRewrite(pustream::TransferOp op, OneToNOpAdaptor adaptor, ConversionPatternRewriter& rewriter) const override
   {
-    Location loc            = op.getLoc();
-    auto sourceType         = cast<MemRefType>(op.getSource().getType());
-    auto targetType         = cast<MemRefType>(op.getTarget().getType());
+    Location loc      = op.getLoc();
+    auto sourceType   = cast<MemRefType>(op.getSource().getType());
+    auto targetType   = cast<MemRefType>(op.getTarget().getType());
     bool sourceIsSram = isSram(sourceType);
 
     Value sramView  = sourceIsSram ? op.getSource() : op.getTarget();
@@ -87,8 +77,8 @@ public:
     FailureOr<int64_t> bytes = getElementByteSize(dram.getElementType(), op);
     if (failed(bytes)) return op.emitError("cannot determine the byte size of the element type");
 
-    Descriptor sramBox = descriptorOf(rewriter, loc, sramView);
-    Descriptor dramBox = descriptorOf(rewriter, loc, dramView);
+    ViewDescriptor sramBox = ViewDescriptor::read(rewriter, loc, sramView);
+    ViewDescriptor dramBox = ViewDescriptor::read(rewriter, loc, dramView);
 
     SmallVector<Value> operands{
       adaptor.getToken()[0], adaptor.getToken()[1], sourceIsSram ? dramView : sramView,
@@ -126,8 +116,8 @@ public:
     FailureOr<int64_t> bytes = getElementByteSize(sourceType.getElementType(), op);
     if (failed(bytes)) return op.emitError("cannot determine the byte size of the element type");
 
-    Descriptor source = descriptorOf(rewriter, loc, op.getSource());
-    Descriptor target = descriptorOf(rewriter, loc, op.getTarget());
+    ViewDescriptor source = ViewDescriptor::read(rewriter, loc, op.getSource());
+    ViewDescriptor target = ViewDescriptor::read(rewriter, loc, op.getTarget());
 
     SmallVector<Value> operands{
       adaptor.getTargetToken()[0], adaptor.getTargetToken()[1], op.getTarget(), op.getSource(),
@@ -244,8 +234,8 @@ struct PustreamToPumemPass : public ::impl::PustreamToPumemBase<PustreamToPumemP
     TypeConverter converter;
     converter.addConversion([](Type type) { return type; });
     converter.addConversion([](StreamTokenType type, SmallVectorImpl<Type>& results) {
-      results.push_back(DmaHandleType::get(type.getContext()));
-      results.push_back(DmaMetaType::get(type.getContext()));
+      results.push_back(DmaHandlePtrType::get(type.getContext()));
+      results.push_back(DmaMetaPtrType::get(type.getContext()));
       return success();
     });
 
@@ -266,6 +256,8 @@ struct PustreamToPumemPass : public ::impl::PustreamToPumemBase<PustreamToPumemP
       SyncOpLowering
     >(converter, &getContext());
     // clang-format on
+
+    scf::populateSCFStructuralTypeConversionsAndLegality(converter, patterns, target);
 
     if (failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) signalPassFailure();
   }

@@ -206,9 +206,6 @@ template <typename T, int64_t M, int64_t N, int64_t K> void runtime_matmul(T* A,
   }
 }
 
-// Element-wise copy between two buffers of the same static shape. Used when a
-// same-space copy has no DMA handle to wait on, so it has to run on the compute
-// executor instead of the host.
 template <typename T, int64_t NumElements> void runtime_copy(T* src, T* dst)
 {
   for (int64_t i = 0; i < NumElements; ++i) dst[i] = src[i];

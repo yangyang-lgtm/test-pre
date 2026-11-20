@@ -28,7 +28,7 @@ std::string castTypeName(Type type)
     .Case<BFloat16Type>([](auto) { return "bf16"; })
     .Case<Float32Type>([](auto) { return "f32"; })
     .Case<Float64Type>([](auto) { return "f64"; })
-    .Default([](Type) { return std::string(""); });
+    .Default([](Type) { return ""; });
 }
 
 std::string typeString(Type type)
@@ -41,8 +41,10 @@ std::string typeString(Type type)
       return home + typeString(p.getElemType()) + "*";
     })
     .Case<pumem::VoidType>([](pumem::VoidType) { return "void"; })
-    .Case<pumem::DmaHandleType>([](pumem::DmaHandleType) { return std::string("pumem_dma_handle_t"); })
-    .Case<pumem::DmaMetaType>([](pumem::DmaMetaType) { return std::string("pumem_dma_meta_t"); })
+    .Case<pumem::DmaHandleType>([](pumem::DmaHandleType) { return "pumem_dma_handle_t"; })
+    .Case<pumem::DmaMetaType>([](pumem::DmaMetaType) { return "pumem_dma_meta_t"; })
+    .Case<pumem::DmaHandlePtrType>([](pumem::DmaHandlePtrType) { return "pumem_dma_handle_t*"; })
+    .Case<pumem::DmaMetaPtrType>([](pumem::DmaMetaPtrType) { return "pumem_dma_meta_t*"; })
     .Case<IndexType>([](IndexType) { return "int64_t"; })
     .Case<IntegerType>([](IntegerType it) -> std::string {
       switch (it.getWidth()) {
@@ -51,7 +53,7 @@ std::string typeString(Type type)
         case 16: return "int16_t";
         case 32: return "int32_t";
         case 64: return "int64_t";
-        default: return std::string("");
+        default: return "";
       }
     })
     .Case<FloatType>([](FloatType ft) -> std::string {
@@ -59,9 +61,9 @@ std::string typeString(Type type)
       if (ft.isF64()) return "double";
       if (ft.isF16()) return "float16";
       if (ft.isBF16()) return "bfloat16";
-      return std::string("");
+      return "";
     })
-    .Default([](Type) { return std::string(""); });
+    .Default([](Type) { return ""; });
 }
 
 std::string getInfinityName(Type ft, bool isNeg)
@@ -193,6 +195,11 @@ private:
     return llvm::TypeSwitch<Operation*, LogicalResult>(op)
       .Case<puc::ReturnOp>([&](puc::ReturnOp op) { return emitReturn(op); })
       .Case<puc::ConstantOp>([&](puc::ConstantOp op) { return emitConstant(op); })
+      .Case<puc::AddressOfOp>([&](puc::AddressOfOp op) {
+        os << typeString(op.getPointer().getType()) << ' ' << valueName(op.getPointer()) << " = &"
+           << valueName(op.getValue()) << ";\n";
+        return success();
+      })
       .Case<puc::LocalOp>([&](puc::LocalOp op) {
         os << typeString(op.getResult().getType()) << ' ' << valueName(op.getResult());
         if (op.getInit()) os << " = " << valueName(op.getInit());

@@ -144,11 +144,28 @@ struct DmaSlotOpConversion : OpConversionPattern<pumem::DmaSlotOp>
     pumem::DmaSlotOp op, pumem::DmaSlotOp::Adaptor adaptor, ConversionPatternRewriter& rewriter
   ) const override
   {
-    // The handle and the metadata slot are mutable C++ objects the runtime
-    // writes into, so they become locals rather than SSA values.
+    auto function = op->getParentOfType<puc::FuncOp>();
+    if (!function) return op.emitError("a slot needs an enclosing function");
+
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(&function.getBody().front());
     auto handle = puc::LocalOp::create(rewriter, op.getLoc(), op.getHandle().getType(), Value{});
     auto meta   = puc::LocalOp::create(rewriter, op.getLoc(), op.getMeta().getType(), Value{});
     rewriter.replaceOp(op, {handle.getResult(), meta.getResult()});
+    return success();
+  }
+};
+
+struct AddressOfOpConversion : OpConversionPattern<pumem::AddressOfOp>
+{
+  using OpConversionPattern<pumem::AddressOfOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    pumem::AddressOfOp op, pumem::AddressOfOp::Adaptor adaptor, ConversionPatternRewriter& rewriter
+  ) const override
+  {
+    auto pointer = puc::AddressOfOp::create(rewriter, op.getLoc(), op.getPointer().getType(), adaptor.getValue());
+    rewriter.replaceOp(op, pointer.getPointer());
     return success();
   }
 };
@@ -321,7 +338,8 @@ void mlir::triton::populatePumemToPucPatterns(RewritePatternSet& patterns, TypeC
     LoadOpConversion,
     StoreOpConversion,
     DmaSlotOpConversion,
-  CopyOpConversion,
+    AddressOfOpConversion,
+    CopyOpConversion,
     GatherOpConversion,
     ScatterOpConversion,
     RuntimeCallOpConversion,

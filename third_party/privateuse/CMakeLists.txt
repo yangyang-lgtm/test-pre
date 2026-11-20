@@ -10,6 +10,7 @@ get_property(extension_libs GLOBAL PROPERTY MLIR_EXTENSION_LIBS)
 
 add_triton_plugin(TritonPrivateUse ${CMAKE_CURRENT_SOURCE_DIR}/privateuse.cc LINK_LIBS
   PrivateUseTransforms
+  PrivateUseMemrefToPuStream
   PrivateUseUtils
   PrivateUseToPuc
   PucTranslate

@@ -1,6 +1,5 @@
 add_subdirectory(CollapseShape)
 add_subdirectory(LowerLinalgReduce)
-add_subdirectory(MemrefToPuStream)
 add_subdirectory(PidLoop)
 add_subdirectory(PucLaunchKernel)
 add_subdirectory(PucLocalizeCarried)

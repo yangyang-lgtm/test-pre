@@ -10,6 +10,10 @@ add_triton_library(PrivateUsePustreamToPumem
   MLIRIR
   MLIRMemRefDialect
   MLIRPass
+  MLIRSCFDialect
+  MLIRSCFTransforms
+  MLIRSCFDialect
+  MLIRSCFTransforms
   MLIRSupport
   MLIRTransforms
   PUMemIR

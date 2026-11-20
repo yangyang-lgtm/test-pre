@@ -7,6 +7,7 @@
 #include "privateuse/Conversion/Common/I1ToI8.h"
 #include "privateuse/Conversion/ScfToPumem/ScfToPumem.h"
 #include "privateuse/Dialect/PUMem/IR/PUMemDialect.h"
+#include "privateuse/Utils/Constants.h"
 
 #define DEBUG_TYPE "scf-to-pumem"
 
@@ -42,7 +43,7 @@ public:
       toIndex(adaptor.getStep()), adaptor.getInitArgs()
     );
 
-    for (StringRef name : {"pumem.pipeline", "pumem.pipelined"})
+    for (StringRef name : {kPipelineAttr, kPipelinedLoopAttr})
       if (Attribute attr = op->getAttr(name)) newFor->setAttr(name, attr);
 
     Block* oldBody = &op.getRegion().front();
@@ -120,12 +121,12 @@ public:
   {
     // clang-format off
     registry.insert<
-        scf::SCFDialect,
-        pumem::PUMemDialect,
-        arith::ArithDialect,
-        func::FuncDialect,
-        memref::MemRefDialect,
-        vector::VectorDialect
+      scf::SCFDialect,
+      pumem::PUMemDialect,
+      arith::ArithDialect,
+      func::FuncDialect,
+      memref::MemRefDialect,
+      vector::VectorDialect
     >();
     // clang-format on
   }
@@ -137,9 +138,9 @@ public:
 
     // clang-format off
     patterns.add<
-        ForOpConversion,
-        IfOpConversion,
-        YieldOpConversion
+      ForOpConversion,
+      IfOpConversion,
+      YieldOpConversion
     >(typeConverter, &getContext());
     // clang-format on
 

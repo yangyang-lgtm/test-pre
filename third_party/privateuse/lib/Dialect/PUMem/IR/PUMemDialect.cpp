@@ -779,6 +779,16 @@ ParseResult IfOp::parse(OpAsmParser& parser, OperationState& result)
   return success();
 }
 
+LogicalResult AddressOfOp::verify()
+{
+  Type value   = getValue().getType();
+  Type pointer = getPointer().getType();
+  if (isa<DmaHandleType>(value) && isa<DmaHandlePtrType>(pointer)) return success();
+  if (isa<DmaMetaType>(value) && isa<DmaMetaPtrType>(pointer)) return success();
+  return emitOpError("the result must be the address of the operand: "
+                     "!pumem.dma_handle -> !pumem.dma_handle_ptr, !pumem.dma_meta -> !pumem.dma_meta_ptr");
+}
+
 void IfOp::print(OpAsmPrinter& p)
 {
   bool printBlockTerminators = false;

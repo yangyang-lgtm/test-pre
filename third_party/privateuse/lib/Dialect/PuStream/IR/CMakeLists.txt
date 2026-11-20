@@ -7,6 +7,7 @@ add_triton_library(PuStreamIR
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRMemRefDialect
+  MLIRSCFDialect
   MLIRSupport
   MLIRSideEffectInterfaces
 )
