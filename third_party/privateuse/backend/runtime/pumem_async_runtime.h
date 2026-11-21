@@ -20,6 +20,14 @@ enum class pumem_copy_dir {
 
 struct pumem_dma_handle_t
 {
+  pumem_dma_handle_t()                                     = default;
+  pumem_dma_handle_t(const pumem_dma_handle_t&)            = delete;
+  pumem_dma_handle_t& operator=(const pumem_dma_handle_t&) = delete;
+
+  /// The handle owns the tasks it still points at, so a kernel that ends without
+  /// draining the queues still releases them.
+  ~pumem_dma_handle_t();
+
   int64_t id = 0;
 
   mutable std::atomic<pumem_task*> last_read{nullptr};

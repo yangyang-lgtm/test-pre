@@ -1,6 +1,7 @@
 #ifndef PUC_DIALECT_TD
 #define PUC_DIALECT_TD
 
+include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/BuiltinAttributeInterfaces.td"
 include "mlir/IR/SymbolInterfaces.td"
@@ -26,10 +27,33 @@ def Puc_Dialect : Dialect {
   }];
 
   let hasConstantMaterializer = 1;
+  let useDefaultTypePrinterParser = 1;
 }
 
 class Puc_Op<string mnemonic, list<Trait> traits = []> :
     Op<Puc_Dialect, mnemonic, traits> {
+}
+
+def Puc_TimerType : TypeDef<Puc_Dialect, "Timer"> {
+  let mnemonic = "timer";
+
+  let parameters = (ins StringRefParameter<"name of the function being timed">:$name,
+                        TypeParameter<"int64_t", "how many times the body runs">:$iterations);
+  let assemblyFormat = "`<` $name `,` $iterations `>`";
+
+  let summary = "A scope timer owned by the enclosing function";
+
+  let description = [{
+    A local of this type declares the C++ scope timer: puc-translate emits
+
+      PumemScopeTimer vN("name", iterations);
+
+    whose destructor prints the total wall-clock time of the function and the
+    average per run. The repeat count lives in the type because the pass that
+    builds the measuring loop also decides how many runs that average covers.
+
+    Example: %timer = puc.local() : !puc.timer<"cast_kernel_launcher", 5>
+  }];
 }
 
 def Puc_AnyPumemPtr : TypeConstraint<CPred<"::llvm::isa<::mlir::pumem::PtrType>($_self)">, "PUM pointer">;

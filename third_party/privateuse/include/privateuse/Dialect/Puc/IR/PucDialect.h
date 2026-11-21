@@ -12,6 +12,9 @@
 
 #include "privateuse/Dialect/Puc/IR/PucDialect.h.inc"
 
+#define GET_TYPEDEF_CLASSES
+#include "privateuse/Dialect/Puc/IR/PucTypes.h.inc"
+
 #define GET_OP_CLASSES
 #include "privateuse/Dialect/Puc/IR/PucOps.h.inc"
 

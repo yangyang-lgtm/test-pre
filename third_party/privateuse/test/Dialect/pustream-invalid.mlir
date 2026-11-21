@@ -109,3 +109,43 @@ func.func @dispatch_unpaired() {
        -> !pustream.token
   return
 }
+
+// -----
+
+// A token and a view that reach the statement through a loop header must still
+// resolve to one allocation: the two slots below carry token A and view B, so
+// the transfer cannot be waiting on the allocation it writes.
+func.func @crossed_slots(%a: memref<?xf32>) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %ta, %ma = pustream.alloc() : !pustream.token, memref<16xf32, 128>
+  %tb, %mb = pustream.alloc() : !pustream.token, memref<16xf32, 128>
+  %r:2 = scf.for %i = %c0 to %c2 step %c1 iter_args(%t = %ta, %m = %mb) -> (!pustream.token, memref<16xf32, 128>) {
+    // expected-error @+1 {{the SRAM side is not a view of this token's allocation}}
+    %x = pustream.transfer %t, %a, %m : !pustream.token, memref<?xf32>, memref<16xf32, 128> -> !pustream.token
+    scf.yield %x, %mb : !pustream.token, memref<16xf32, 128>
+  }
+  return
+}
+
+// -----
+
+// Rotating a slot means moving its token and its memref together. Here the back
+// slot yields the front memref, so the pair stops denoting one copy.
+func.func @swapped_slots(%a: memref<?xf32>) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %ta, %ma = pustream.alloc() : !pustream.token, memref<16xf32, 128>
+  %tb, %mb = pustream.alloc() : !pustream.token, memref<16xf32, 128>
+  %r:4 = scf.for %i = %c0 to %c2 step %c1
+         iter_args(%ft = %ta, %fm = %ma, %bt = %tb, %bm = %mb)
+         -> (!pustream.token, memref<16xf32, 128>, !pustream.token, memref<16xf32, 128>) {
+    // expected-error @+1 {{the SRAM side is not a view of this token's allocation}}
+    %x = pustream.transfer %bt, %a, %bm : !pustream.token, memref<?xf32>, memref<16xf32, 128> -> !pustream.token
+    %y = pustream.transfer %ft, %a, %fm : !pustream.token, memref<?xf32>, memref<16xf32, 128> -> !pustream.token
+    scf.yield %x, %fm, %ft, %bm : !pustream.token, memref<16xf32, 128>, !pustream.token, memref<16xf32, 128>
+  }
+  return
+}

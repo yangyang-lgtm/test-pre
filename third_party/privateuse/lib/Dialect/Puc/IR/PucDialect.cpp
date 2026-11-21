@@ -22,11 +22,18 @@
 #define GET_OP_CLASSES
 #include "privateuse/Dialect/Puc/IR/PucOps.cpp.inc"
 
+#define GET_TYPEDEF_CLASSES
+#include "privateuse/Dialect/Puc/IR/PucTypes.cpp.inc"
+
 using namespace mlir;
 using namespace mlir::puc;
 
 void mlir::puc::PucDialect::initialize()
 {
+  addTypes<
+#define GET_TYPEDEF_LIST
+#include "privateuse/Dialect/Puc/IR/PucTypes.cpp.inc"
+    >();
   addOperations<
 #define GET_OP_LIST
 #include "privateuse/Dialect/Puc/IR/PucOps.cpp.inc"

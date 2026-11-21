@@ -29,6 +29,26 @@
 void set_physical_threads_id(int64_t id);
 int64_t get_physical_id();
 
+/// Monotonic host clock in nanoseconds.
+int64_t pumem_timer_read();
+
+/// Prints the wall-clock time of the enclosing scope, plus the average per run
+/// when the scope runs its body several times.
+class PumemScopeTimer
+{
+public:
+  PumemScopeTimer(const char* name, int64_t iterations);
+  ~PumemScopeTimer();
+
+  PumemScopeTimer(const PumemScopeTimer&)            = delete;
+  PumemScopeTimer& operator=(const PumemScopeTimer&) = delete;
+
+private:
+  const char* name_;
+  int64_t iterations_;
+  int64_t start_;
+};
+
 void* alloc(int64_t bytes, int64_t alignment);
 void dealloc(void* ptr);
 void reset_alloc();

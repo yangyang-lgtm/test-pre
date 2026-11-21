@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 struct pumem_task
@@ -20,6 +21,7 @@ struct pumem_task
   std::condition_variable cv;
   std::function<void()> fn;
   bool done = false;
+  std::atomic<int> refs{1};
 };
 
 namespace {
@@ -108,7 +110,7 @@ struct Runtime
   std::condition_variable compute_cv;
 
   std::mutex tasks_mutex;
-  std::vector<std::unique_ptr<pumem_task>> tasks;
+  std::unordered_map<pumem_task*, std::unique_ptr<pumem_task>> tasks;
   ThreadGuard guard{load_lane, store_lane, compute_lane};
 };
 
@@ -126,24 +128,62 @@ void account_retired()
   }
 }
 
+namespace {
+
+void erase_if_unreachable(pumem_task* task)
+{
+  Runtime& state = runtime();
+  std::lock_guard<std::mutex> guard(state.tasks_mutex);
+  auto it = state.tasks.find(task);
+  if (it == state.tasks.end()) return;
+  bool done = false;
+  {
+    std::lock_guard<std::mutex> taskLock(task->mutex);
+    done = task->done;
+  }
+  if (!done || task->refs.load() != 1) return;
+  state.tasks.erase(it);
+}
+
+void task_release(pumem_task* task)
+{
+  if (!task) return;
+  task->refs.fetch_sub(1);
+  erase_if_unreachable(task);
+}
+
+void task_retain(pumem_task* task)
+{
+  task->refs.fetch_add(1);
+}
+
+} // namespace
+
 void retire_dma(pumem_task* task)
 {
   {
     std::lock_guard<std::mutex> lock(task->mutex);
     task->done = true;
+    task->cv.notify_all();
   }
-  task->cv.notify_all();
   account_retired();
+  erase_if_unreachable(task);
 }
 
-void retire_compute()
+void retire_compute(pumem_task* task)
 {
+  {
+    std::lock_guard<std::mutex> lock(task->mutex);
+    task->done = true;
+    task->cv.notify_all();
+  }
   {
     std::lock_guard<std::mutex> lock(runtime().compute_mutex);
     runtime().compute_completed.fetch_add(1);
   }
   runtime().compute_cv.notify_all();
   account_retired();
+  erase_if_unreachable(task);
 }
 
 void run_lane(Lane& lane, bool is_compute)
@@ -153,7 +193,7 @@ void run_lane(Lane& lane, bool is_compute)
     if (!task) return;
     task->fn();
     if (is_compute)
-      retire_compute();
+      retire_compute(task);
     else
       retire_dma(task);
   }
@@ -172,7 +212,7 @@ pumem_task* create_task(std::function<void()> fn)
   runtime().outstanding.fetch_add(1);
   {
     std::lock_guard<std::mutex> lock(runtime().tasks_mutex);
-    runtime().tasks.push_back(std::move(owned));
+    runtime().tasks.emplace(task, std::move(owned));
   }
   return task;
 }
@@ -225,6 +265,72 @@ bool is_load(pumem_copy_dir dir)
 
 } // namespace
 
+namespace {
+
+struct ShadowEntry
+{
+  int readers = 0;
+  int writers = 0;
+};
+
+struct ShadowState
+{
+  std::mutex mutex;
+  std::unordered_map<void*, ShadowEntry> entries;
+  bool enabled = true;
+  bool checked = false;
+};
+
+ShadowState& shadow()
+{
+  static auto state = std::make_unique<ShadowState>();
+  if (!state->checked) {
+    const char* env = std::getenv("PUMEM_SHADOW_QUEUE");
+    state->enabled  = !env || std::atoi(env) != 0;
+    state->checked  = true;
+  }
+  return *state;
+}
+
+void shadow_abort(const char* what, void* buffer, int readers, int writers)
+{
+  std::fprintf(stderr, "pumem: %s on %p (%d readers, %d writers still in flight)\n", what, buffer, readers, writers);
+  std::abort();
+}
+
+void shadow_enqueue(void* dst, void* src)
+{
+  if (!shadow().enabled) return;
+  std::lock_guard<std::mutex> lock(shadow().mutex);
+  ShadowEntry& target = shadow().entries[dst];
+  ShadowEntry& source = shadow().entries[src];
+  if (target.readers > 0) shadow_abort("write-after-read", dst, target.readers, target.writers);
+  if (target.writers > 0) shadow_abort("write-after-write", dst, target.readers, target.writers);
+  if (source.writers > 0) shadow_abort("read-after-write", src, source.readers, source.writers);
+  ++target.writers;
+  ++source.readers;
+}
+
+void shadow_retire(void* dst, void* src)
+{
+  if (!shadow().enabled) return;
+  std::lock_guard<std::mutex> lock(shadow().mutex);
+  ShadowEntry& target = shadow().entries[dst];
+  ShadowEntry& source = shadow().entries[src];
+  if (target.writers > 0) --target.writers;
+  if (source.readers > 0) --source.readers;
+}
+
+} // namespace
+
+pumem_dma_handle_t::~pumem_dma_handle_t()
+{
+  pumem_task* read  = last_read.exchange(nullptr);
+  pumem_task* write = last_write.exchange(nullptr);
+  if (read) task_release(read);
+  if (write) task_release(write);
+}
+
 void pumem_detail::enqueue_dispatch(std::function<void()> fn)
 {
   ensure_started();
@@ -251,14 +357,18 @@ void pumem_detail::enqueue_copy(
     detail::box_copy(
       dst, src, rank, dims.data(), dims.data() + rank, dims.data() + 2 * rank, static_cast<size_t>(elem_size)
     );
+    shadow_retire(dst, src);
     metaPtr->busy.store(false, std::memory_order_release);
   };
+  shadow_enqueue(dst, src);
 
   ensure_started();
   const bool load  = is_load(dir);
   pumem_task* task = create_task(std::move(fn));
+  task_retain(task);
   (load ? runtime().load_lane : runtime().store_lane).push(task);
-  (load ? handle.last_read : handle.last_write).store(task, std::memory_order_release);
+  pumem_task* previous = (load ? handle.last_read : handle.last_write).exchange(task, std::memory_order_acq_rel);
+  if (previous) task_release(previous);
 }
 
 void pumem_wait(const pumem_dma_handle_t& handle)
@@ -276,8 +386,31 @@ void pumem_wait_dispatch()
   state.compute_cv.wait(lock, [&] { return state.compute_completed.load() >= target; });
 }
 
+void release_retired_tasks()
+{
+  Runtime& state = runtime();
+  std::lock_guard<std::mutex> guard(state.tasks_mutex);
+  for (auto it = state.tasks.begin(); it != state.tasks.end();) {
+    pumem_task* task = it->first;
+    bool done        = false;
+    {
+      std::lock_guard<std::mutex> taskLock(task->mutex);
+      done = task->done;
+    }
+    if (!done || task->refs.load() != 1) {
+      ++it;
+      continue;
+    }
+    it = state.tasks.erase(it);
+  }
+  if (std::getenv("PUMEM_TASK_STATS")) std::fprintf(stderr, "pumem: %zu tasks alive\n", state.tasks.size());
+}
+
 void pumem_sync()
 {
-  std::unique_lock<std::mutex> lock(runtime().idle_mutex);
-  runtime().idle_cv.wait(lock, [] { return runtime().outstanding.load() == 0; });
+  {
+    std::unique_lock<std::mutex> lock(runtime().idle_mutex);
+    runtime().idle_cv.wait(lock, [] { return runtime().outstanding.load() == 0; });
+  }
+  release_retired_tasks();
 }

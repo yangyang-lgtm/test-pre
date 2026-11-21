@@ -1,5 +1,8 @@
 #include "privateuse/Dialect/PuStream/IR/PuStreamDialect.h"
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -93,32 +96,138 @@ static Value allocationOf(Value token)
   }
 }
 
-static Value tokenOfView(Value view)
-{
-  while (auto viewLike = view.getDefiningOp<ViewLikeOpInterface>()) view = viewLike.getViewSource();
-  if (auto alloc = view.getDefiningOp<AllocOp>()) return alloc.getToken();
-  return {};
-}
+using Slot = std::pair<Operation*, unsigned>;
 
-static bool crossesRegion(Value value)
+struct AllocationSet
 {
+  llvm::DenseSet<Slot> slots;
+  bool unknown = false;
+
+  bool empty() const { return slots.empty(); }
+  void add(Operation* alloc, unsigned odd) { slots.insert({alloc, odd}); }
+
+  void merge(const AllocationSet& other, bool flip = false)
+  {
+    for (const Slot& slot : other.slots) slots.insert({slot.first, flip ? 1u - slot.second : slot.second});
+    unknown |= other.unknown;
+  }
+
+  bool equals(const AllocationSet& other) const
+  {
+    if (slots.size() != other.slots.size()) return false;
+    for (const Slot& slot : slots)
+      if (!other.slots.contains(slot)) return false;
+    return true;
+  }
+};
+
+class AllocationResolver
+{
+public:
+  AllocationSet resolve(Value value) { return walk(value, 0); }
+
+private:
+  AllocationSet walk(Value value, unsigned depth);
+  llvm::SmallPtrSet<Value, 16> active_;
+};
+
+AllocationSet AllocationResolver::walk(Value value, unsigned depth)
+{
+  AllocationSet set;
+  if (depth > 32) {
+    set.unknown = true;
+    return set;
+  }
+
   if (auto argument = dyn_cast<BlockArgument>(value)) {
     Operation* parent = argument.getOwner()->getParentOp();
-    if (!parent) return false;
-    return llvm::any_of(parent->getResultTypes(), [](Type type) { return isa<StreamTokenType>(type); });
+    if (!parent) {
+      set.unknown = true;
+      return set;
+    }
+    unsigned index = argument.getArgNumber();
+    if (auto loop = dyn_cast<scf::ForOp>(parent)) {
+      unsigned iterIndex = index - loop.getNumInductionVars();
+      if (iterIndex >= loop.getInitArgs().size()) {
+        set.unknown = true;
+        return set;
+      }
+      if (!active_.insert(value).second) return set;
+      set.merge(walk(loop.getInitArgs()[iterIndex], depth + 1));
+      auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
+      set.merge(walk(yield.getOperand(iterIndex), depth + 1), /*flip=*/true);
+      active_.erase(value);
+      return set;
+    }
+    Operation* terminator = argument.getOwner()->getTerminator();
+    if (!terminator || index >= terminator->getNumOperands()) {
+      set.unknown = true;
+      return set;
+    }
+    if (!active_.insert(value).second) return set;
+    set.merge(walk(terminator->getOperand(index), depth + 1));
+    active_.erase(value);
+    return set;
   }
+
   Operation* producer = value.getDefiningOp();
-  if (!producer || producer->getNumRegions() == 0) return false;
-  return llvm::any_of(producer->getResultTypes(), [](Type type) { return isa<StreamTokenType>(type); });
+  if (!producer) {
+    set.unknown = true;
+    return set;
+  }
+
+  if (isa<AllocOp>(producer)) {
+    set.add(producer, /*odd=*/false);
+    return set;
+  }
+  if (auto view = dyn_cast<ViewLikeOpInterface>(producer)) return walk(view.getViewSource(), depth + 1);
+  if (auto await = dyn_cast<AwaitOp>(producer)) return walk(await.getToken(), depth + 1);
+  if (auto awaitCompute = dyn_cast<AwaitComputeOp>(producer))
+    return walk(awaitCompute.getTokens()[cast<OpResult>(value).getResultNumber()], depth + 1);
+  if (auto transfer = dyn_cast<TransferOp>(producer)) return walk(transfer.getToken(), depth + 1);
+  if (auto copy = dyn_cast<CopyOp>(producer)) return walk(copy.getTargetToken(), depth + 1);
+  if (auto dispatch = dyn_cast<DispatchOp>(producer)) {
+    ValueRange outs = dispatch.getOuts();
+    unsigned index  = cast<OpResult>(value).getResultNumber();
+    if (outs.size() != 2 * dispatch.getResults().size()) {
+      set.unknown = true;
+      return set;
+    }
+    return walk(outs[2 * index], depth + 1);
+  }
+  if (auto loop = dyn_cast<scf::ForOp>(producer)) {
+    unsigned index = cast<OpResult>(value).getResultNumber();
+    if (!active_.insert(value).second) return set;
+    set.merge(walk(loop.getInitArgs()[index], depth + 1));
+    auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
+    set.merge(walk(yield.getOperand(index), depth + 1), /*flip=*/true);
+    active_.erase(value);
+    return set;
+  }
+  if (auto ifOp = dyn_cast<scf::IfOp>(producer)) {
+    unsigned index = cast<OpResult>(value).getResultNumber();
+    if (!active_.insert(value).second) return set;
+    for (Region& region : ifOp->getRegions()) {
+      if (region.empty()) continue;
+      if (auto yield = dyn_cast<scf::YieldOp>(region.front().getTerminator()))
+        if (index < yield.getNumOperands()) set.merge(walk(yield.getOperand(index), depth + 1));
+    }
+    active_.erase(value);
+    return set;
+  }
+  set.unknown = true;
+  return set;
 }
 
 static bool belongsTo(Value token, Value view)
 {
   while (auto viewLike = view.getDefiningOp<ViewLikeOpInterface>()) view = viewLike.getViewSource();
-  if (crossesRegion(view)) return true;
 
-  Value allocation = tokenOfView(view);
-  return allocation && allocationOf(token) == allocation;
+  AllocationResolver resolver;
+  AllocationSet tokens = resolver.resolve(token);
+  AllocationSet views  = resolver.resolve(view);
+  if (tokens.empty() || views.empty() || tokens.unknown || views.unknown) return false;
+  return tokens.equals(views);
 }
 
 void PuStreamDialect::initialize()

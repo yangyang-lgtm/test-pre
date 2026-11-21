@@ -56,6 +56,7 @@
 #include "privateuse/Transform/PucLaunchKernel/Passes.h"
 #include "privateuse/Transform/PucLocalizeCarried/Passes.h"
 #include "privateuse/Transform/PucSimplifyAssign/Passes.h"
+#include "privateuse/Transform/PucRepeat/Passes.h"
 #include "privateuse/Transform/PucVoidPtrArgs/Passes.h"
 #include "privateuse/Transform/SinkConstantCallArgs/Passes.h"
 #include "privateuse/Transform/SpecializeKernel/Passes.h"
@@ -99,6 +100,7 @@ inline void registerPrivateUseDialects(mlir::DialectRegistry& registry)
   mlir::triton::registerPucLaunchKernelPasses();
   mlir::triton::registerPucLocalizeCarriedPass();
   mlir::triton::registerPucSimplifyAssignPass();
+  mlir::triton::registerPucRepeatPass();
   mlir::triton::registerPucVoidPtrArgsPass();
   mlir::triton::registerSinkConstantCallArgsPasses();
   mlir::triton::registerSpecializeKernelPass();

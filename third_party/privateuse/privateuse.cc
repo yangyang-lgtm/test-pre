@@ -17,6 +17,7 @@
 #include "privateuse/Transform/PucLaunchKernel/Passes.h"
 #include "privateuse/Transform/PucLocalizeCarried/PucLocalizeCarried.h"
 #include "privateuse/Transform/PucSimplifyAssign/PucSimplifyAssign.h"
+#include "privateuse/Transform/PucRepeat/PucRepeat.h"
 #include "privateuse/Transform/PucVoidPtrArgs/PucVoidPtrArgs.h"
 #include "privateuse/Transform/SinkConstantCallArgs/Passes.h"
 #include "privateuse/Transform/SpecializeKernel/SpecializeKernel.h"
@@ -191,6 +192,12 @@ void init_triton_privateuse(py::module_& m)
       pm.addPass(triton::createPucLaunchKernelPass(launcherAttr, kernelAttr));
     },
     py::arg("pm"), py::arg("launcher_attr") = "extern \"C\"", py::arg("kernel_attr") = "GLOBAL"
+  );
+
+  m.def(
+    "add_puc_repeat",
+    [](PassManager& pm, int64_t iterations) { pm.addPass(triton::createPucRepeatPass(iterations)); },
+    py::arg("pm"), py::arg("iterations") = 100
   );
 
   m.def(

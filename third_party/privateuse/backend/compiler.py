@@ -121,6 +121,7 @@ class LoweringPipeline:
     block_bytes: int = 1 << 18
     launcher_attr: str = 'extern "C"'
     kernel_attr: str = "GLOBAL"
+    repeat_iterations: int = 100
     outlined_attr: str = "OUTLINED"
 
     def digest(self):
@@ -136,7 +137,6 @@ class LoweringPipeline:
         module = self._transform(module)
         module = self._lower_to_pumem(module)
         cpp = self._emit_cpp(module)
-        print(cpp)
         _check_entry_symbol(cpp, kernel_name)
         return self._compile_object(cpp)
 
@@ -246,6 +246,8 @@ class LoweringPipeline:
         privateuse.add_puc_void_ptr_args(pm)
         passes.common.add_cse(pm)
         privateuse.add_puc_launch(pm, self.launcher_attr, self.kernel_attr)
+        if self.repeat_iterations > 0:
+            privateuse.add_puc_repeat(pm, self.repeat_iterations)
         passes.common.add_canonicalizer(pm)
         pm.run(module, 'emit_cpp')
         return privateuse.translate_puc_to_cpp(module, self.runtime_backend, self.num_pids)
